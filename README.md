@@ -20,6 +20,39 @@ Temporal Workflow는 Full Demo 중 생성된 `dah_scenario_run` workflow 목록�
 
 ![Temporal workflow list](docs/animations/temporal-workflow.png)
 
+Full Demo 결과 JSON 예시는 [docs/examples/full-demo-report.example.json](docs/examples/full-demo-report.example.json)에서 확인할 수 있습니다. 아래는 해당 파일의 핵심 필드 일부입니다.
+
+```json
+{
+  "run_id": "run-d10b361963d4",
+  "json_report": {
+    "scenario_request": {
+      "attack_type": "selective_message_drop"
+    },
+    "classification": {
+      "classification": "ATTACK_CONFIRMED"
+    },
+    "judge_audit_event": {
+      "final_verdict": "ATTACK_SUCCESS_CANDIDATE"
+    },
+    "judge_verdict": {
+      "total_score": 180.0
+    },
+    "evidence_ledger": {
+      "event_count": 22
+    },
+    "agent_graph": {
+      "framework": "langgraph"
+    },
+    "llm_plan": {
+      "openai_used": true,
+      "source": "openai_responses_api",
+      "model": "gpt-5.5"
+    }
+  }
+}
+```
+
 ## 시나리오 개요
 
 | 항목 | 내용 |
