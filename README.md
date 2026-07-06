@@ -4,9 +4,21 @@
 
 보고서의 핵심 시나리오는 **위성 데이터링크 모사 구간의 정찰 좌표 보고 차단 및 텔레메트리 재전송 효과 주입을 통한 UAV·UGV 협업 임무 교란**입니다. 실제 침투나 파괴가 아니라 통제된 시뮬레이션 안에서 공격·방어 AI의 관측, 판단, 행동, 검증 능력을 비교하는 것을 목표로 합니다.
 
+## 핵심 평가 목표
+
+대회 관점의 핵심은 **Red Agent가 허용된 공격 주입 API만으로 목표 임무 영향을 얼마나 안정적으로 만들어내는지**와 **Blue Agent가 그 공격을 얼마나 정확히 탐지·완화·복구하는지**입니다. 따라서 본 저장소의 시뮬레이션, Judge, Evidence Ledger, 대시보드는 모두 아래 두 축을 중심으로 결과를 산출합니다.
+
+| 평가 축 | 핵심 지표 | 판단 기준 |
+| --- | --- | --- |
+| Red Agent 공격 성공률 | `attack_success_rate`, `attack_score`, mission impact | 목표 flow 선택, 선택적 차단·복구 방해·display replay-effect 실행, UGV Safe Stop·임무 지연·GCS-Truth 불일치 유도 |
+| Blue Agent 방어 성공률 | `defense_success_rate`, `recovery_success_rate`, `defense_score` | 공격/정상 장애 분류, 대응 도구 선택, quarantine/resync/restore 실행, 복구 검증 |
+| 임무 가용성 | `availability`, `safe_stop_rate`, `total_score` | 공격 성공과 방어 대응 이후에도 안전 정책과 임무 지속성이 보존되는지 |
+
+최종 보고서 JSON은 Judge가 산출한 `attack_score`, `defense_score`, `availability`, `total_score`, `final_verdict`를 포함하며, Grafana와 Agent Dashboard는 같은 실행 결과를 시각화합니다.
+
 ## 작동 흐름 빠른 보기
 
-아래 이미지는 browserless MCP로 Agent Dashboard, Grafana, Temporal UI를 캡처한 결과입니다. Agent Dashboard의 노드 강조와 Executed Nodes 재생은 동작 과정을 쉽게 확인하기 위한 200ms 시각화 간격이며, 실제 API 실행·Temporal workflow·보고서 생성 자체를 지연시키지는 않습니다.
+아래 이미지는 Agent Dashboard, Grafana, Temporal UI에서 확인할 수 있는 주요 실행 결과입니다. Agent Dashboard의 노드 강조와 Executed Nodes 재생은 동작 과정을 쉽게 확인하기 위한 200ms 시각화 간격이며, 실제 API 실행·Temporal workflow·보고서 생성 자체를 지연시키지는 않습니다.
 
 Agent Dashboard는 Full Demo API 실행 중 SSE 이벤트가 그래프 노드, 링크, Executed Nodes 패널에 반영되는 과정을 1920x1200 해상도와 약 200ms 간격으로 캡처한 GIF입니다.
 
@@ -49,6 +61,68 @@ Full Demo 결과 JSON 예시는 [docs/examples/full-demo-report.example.json](do
       "source": "openai_responses_api",
       "model": "gpt-5.5"
     }
+  }
+}
+```
+
+LiteLLM 요청/응답 로그에서 `user_request`와 `llm_response`만 잘라낸 예시는 [docs/examples/litellm-request-response.example.json](docs/examples/litellm-request-response.example.json)에서 확인할 수 있습니다. LLM은 공격 판정 결과, 임무 영향, 허용 도구 목록을 입력으로 받고, 고정 JSON schema에 맞는 advisory plan만 반환합니다.
+
+```json
+{
+  "user_request": {
+    "model": "gpt-5.5",
+    "reasoning": {
+      "effort": "low"
+    },
+    "response_format": {
+      "type": "json_schema",
+      "name": "dah_agent_plan",
+      "required": [
+        "classification",
+        "recommended_actions",
+        "rationale",
+        "safety_notes"
+      ],
+      "strict": true
+    },
+    "incident": {
+      "attack_type": "selective_message_drop",
+      "classification": "ATTACK_CONFIRMED",
+      "attack_score": 0.95,
+      "fault_score": 0.1,
+      "red_tool": "simulate_selective_message_drop",
+      "red_tool_policy_result": "ALLOW",
+      "planned_defense_actions": [
+        "increase_monitoring_level",
+        "mark_telemetry_untrusted",
+        "quarantine_link_session",
+        "request_state_resynchronization"
+      ],
+      "impact_result": {
+        "technical_success": true,
+        "target_drop_rate": 0.58,
+        "max_consecutive_gap_seconds": 21.0,
+        "safe_stop_second": 24,
+        "ugv_state": "SAFE_STOP_CAUSED_BY_COORD_STALE"
+      },
+      "execution_boundary": "LLM output is audited but never executes tools directly.",
+      "llm_role": "advisory_typed_plan_only"
+    }
+  },
+  "llm_response": {
+    "classification": "ATTACK_CONFIRMED selective_message_drop",
+    "recommended_actions": [
+      "increase_monitoring_level",
+      "mark_telemetry_untrusted",
+      "quarantine_link_session",
+      "request_state_resynchronization"
+    ],
+    "rationale": "Attack response is recommended because observed evidence shows a specific command/report flow gap, coordinate freshness exceeded the 15s safe-stop threshold with a 21s max gap, gateway/vehicle delivery mismatch in mock truth state, and impact concentrated on a single session with low non-target impact rate.",
+    "safety_notes": [
+      "Maintain advisory-only handling; do not execute tools directly.",
+      "Keep the affected link session quarantined before attempting restoration.",
+      "After resynchronization, restore only through a validated session workflow if evidence confirms freshness and delivery consistency."
+    ]
   }
 }
 ```

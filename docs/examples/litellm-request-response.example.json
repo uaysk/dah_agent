@@ -1,0 +1,79 @@
+{
+  "user_request": {
+    "model": "gpt-5.5",
+    "reasoning": {
+      "effort": "low"
+    },
+    "response_format": {
+      "type": "json_schema",
+      "name": "dah_agent_plan",
+      "required": [
+        "classification",
+        "recommended_actions",
+        "rationale",
+        "safety_notes"
+      ],
+      "strict": true
+    },
+    "incident": {
+      "incident_id": "inc-2050a0305f10",
+      "mission_id": "mission-dashboard-full-demo",
+      "session_id": "session-full-demo-temporal-demo-a6f59e0dc67b",
+      "attack_type": "selective_message_drop",
+      "classification": "ATTACK_CONFIRMED",
+      "attack_score": 0.95,
+      "fault_score": 0.1,
+      "red_tool": "simulate_selective_message_drop",
+      "red_tool_policy_result": "ALLOW",
+      "planned_defense_actions": [
+        "increase_monitoring_level",
+        "mark_telemetry_untrusted",
+        "quarantine_link_session",
+        "request_state_resynchronization"
+      ],
+      "impact_result": {
+        "technical_success": true,
+        "target_drop_rate": 0.58,
+        "max_consecutive_gap_seconds": 21.0,
+        "safe_stop_second": 24,
+        "ugv_state": "SAFE_STOP_CAUSED_BY_COORD_STALE",
+        "non_target_impact_rate": 0.016
+      },
+      "tool_registry": [
+        "increase_monitoring_level",
+        "mark_telemetry_untrusted",
+        "normal_baseline",
+        "quarantine_link_session",
+        "random_packet_loss",
+        "recovery_interference",
+        "request_state_resynchronization",
+        "restore_attack_injection_state",
+        "restore_validated_session",
+        "simulate_display_replay_effect",
+        "simulate_normal_baseline",
+        "simulate_random_packet_loss",
+        "simulate_recovery_interference",
+        "simulate_selective_command_drop",
+        "simulate_selective_message_drop"
+      ],
+      "execution_boundary": "LLM output is audited but never executes tools directly.",
+      "llm_role": "advisory_typed_plan_only"
+    }
+  },
+  "llm_response": {
+    "classification": "ATTACK_CONFIRMED selective_message_drop",
+    "recommended_actions": [
+      "increase_monitoring_level",
+      "mark_telemetry_untrusted",
+      "quarantine_link_session",
+      "request_state_resynchronization"
+    ],
+    "rationale": "Attack response is recommended because observed evidence shows a specific command/report flow gap, coordinate freshness exceeded the 15s safe-stop threshold with a 21s max gap, gateway/vehicle delivery mismatch in mock truth state, and impact concentrated on a single session with low non-target impact rate.",
+    "safety_notes": [
+      "Maintain advisory-only handling; do not execute tools directly.",
+      "Treat telemetry for session-full-demo-temporal-demo-a6f59e0dc67b as untrusted until resynchronization validates state.",
+      "Keep the affected link session quarantined before attempting restoration.",
+      "After resynchronization, restore only through a validated session workflow if evidence confirms freshness and delivery consistency."
+    ]
+  }
+}
