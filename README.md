@@ -4,6 +4,14 @@
 
 보고서의 핵심 시나리오는 **위성 데이터링크 모사 구간의 정찰 좌표 보고 차단 및 텔레메트리 재전송 효과 주입을 통한 UAV·UGV 협업 임무 교란**입니다. 실제 침투나 파괴가 아니라 통제된 시뮬레이션 안에서 공격·방어 AI의 관측, 판단, 행동, 검증 능력을 비교하는 것을 목표로 합니다.
 
+## 작동 흐름 빠른 보기
+
+아래 GIF는 browserless MCP로 Agent Dashboard, Grafana, Temporal UI를 2560x1600 뷰포트에서 연속 캡처한 뒤 README 표시용으로 1280px 너비로 인코딩한 결과입니다. Agent Dashboard의 노드 강조와 Executed Nodes 재생은 동작 과정을 쉽게 확인하기 위한 200ms 시각화 간격이며, 실제 API 실행·Temporal workflow·보고서 생성 자체를 지연시키지는 않습니다.
+
+| Agent Dashboard | Grafana Metrics | Temporal Workflow |
+| --- | --- | --- |
+| ![Agent Dashboard flow](docs/animations/agent-dashboard-flow.gif) | ![Grafana dashboard flow](docs/animations/grafana-dashboard-flow.gif) | ![Temporal dashboard flow](docs/animations/temporal-dashboard-flow.gif) |
+
 ## 시나리오 개요
 
 | 항목 | 내용 |
@@ -359,6 +367,11 @@ DAH2026-UAV-UGV-C2Telemetry-Scenario/
 ├── docs/
 └── tests/
 ```
+
+
+## 대시보드 시각화 참고
+
+에이전트 대시보드의 작동 흐름 강조 효과는 사용자가 각 단계를 눈으로 따라갈 수 있도록 SSE 이벤트를 200ms 간격으로 순차 재생합니다. 이 지연은 화면 표시용 pacing이며, 실제 API 실행, Tool Executor 처리, Judge 판정, 보고서 생성 경로에 인위적인 대기 시간을 추가하지 않습니다.
 
 ## 최종 요약
 

@@ -355,6 +355,8 @@ def event_activation(event_type: str | None) -> dict[str, list[str]]:
             node_ids.add(edge["target"])
     if event_type == "baseline_ready":
         node_ids.update({"simulator", "truth-state"})
+    elif event_type == "command_delivery_anomaly":
+        node_ids.update({"simulator", "verifier", "evidence-ledger"})
     elif event_type in {"langgraph_red_trace", "langgraph_blue_trace", "langgraph_consistency_checked"}:
         node_ids.add("langgraph")
     elif event_type in {"llm_plan_requested", "llm_plan_completed", "llm_plan_failed"}:
@@ -363,6 +365,10 @@ def event_activation(event_type: str | None) -> dict[str, list[str]]:
         node_ids.add("temporal")
     elif event_type in {"report_generated", "full_demo_started", "full_demo_completed", "full_demo_failed"}:
         node_ids.update({"fastapi", "reports"})
+    elif event_type in {"batch_experiment_completed", "experiment_suite_completed"}:
+        node_ids.update({"simulator", "metrics"})
+    elif event_type == "replay_completed":
+        node_ids.update({"evidence-ledger", "reports", "judge"})
     return {"pulse_node_ids": sorted(node_ids), "pulse_edge_ids": edge_ids}
 
 

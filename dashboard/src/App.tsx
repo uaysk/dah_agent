@@ -11,11 +11,26 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { DashboardEvent, DashboardState, GraphNode } from "@/types"
+import { cn } from "@/lib/utils"
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:18080`
+const EVENT_PLAYBACK_INTERVAL_MS = 200
+const EVENT_PULSE_DURATION_MS = 850
+const GRAPH_WIDTH = 1438
+const GRAPH_HEIGHT = 874
 
 type StreamStatus = "connecting" | "connected" | "reconnecting" | "off"
 type DemoAction = "local-p1" | "temporal-p1" | "suite" | "llm" | "full-demo" | null
+
+type ExecutedNodeStep = {
+  id: string
+  sequence: number
+  event_id: string
+  event_type: string
+  node_id: string
+  occurred_at: string
+  source: string
+}
 
 function fmtPercent(value?: number) {
   return `${Math.round((value ?? 0) * 100)}%`
@@ -67,8 +82,17 @@ export default function App() {
   const [lastLiveEvent, setLastLiveEvent] = useState<DashboardEvent | null>(null)
   const [pulseNodeIds, setPulseNodeIds] = useState<string[]>([])
   const [pulseEdgeIds, setPulseEdgeIds] = useState<string[]>([])
+  const [executedNodeSteps, setExecutedNodeSteps] = useState<ExecutedNodeStep[]>([])
+  const [executedNodeTotal, setExecutedNodeTotal] = useState(0)
+  const [graphPanelHeight, setGraphPanelHeight] = useState(360)
   const [error, setError] = useState<string | null>(null)
+  const graphColumnRef = useRef<HTMLDivElement | null>(null)
   const pulseTimerRef = useRef<number | null>(null)
+  const playbackTimerRef = useRef<number | null>(null)
+  const playbackActiveRef = useRef(false)
+  const eventQueueRef = useRef<DashboardEvent[]>([])
+  const executedStepSequenceRef = useRef(0)
+  const initialReplayUpperBoundRef = useRef<number | null>(null)
 
   const applyState = useCallback((nextData: DashboardState) => {
     setData(nextData)
@@ -93,27 +117,92 @@ export default function App() {
     }
   }, [applyState])
 
-  const pulseGraph = useCallback((event: DashboardEvent) => {
+  const showGraphPulse = useCallback((event: DashboardEvent) => {
+    const nodeIds = event.pulse_node_ids ?? []
     setLastLiveEvent(event)
-    setPulseNodeIds(event.pulse_node_ids ?? [])
+    setPulseNodeIds(nodeIds)
     setPulseEdgeIds(event.pulse_edge_ids ?? [])
+    if (nodeIds.length > 0) {
+      const sequenceStart = executedStepSequenceRef.current
+      const steps = nodeIds.map((nodeId, index) => ({
+        id: `${event.event_id}:${nodeId}:${index}`,
+        sequence: sequenceStart + index + 1,
+        event_id: event.event_id,
+        event_type: event.event_type,
+        node_id: nodeId,
+        occurred_at: event.occurred_at,
+        source: event.source,
+      }))
+      executedStepSequenceRef.current = sequenceStart + steps.length
+      setExecutedNodeTotal(executedStepSequenceRef.current)
+      setExecutedNodeSteps((current) => [...steps, ...current].slice(0, 240))
+    }
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current)
     pulseTimerRef.current = window.setTimeout(() => {
       setPulseNodeIds([])
       setPulseEdgeIds([])
-    }, 3600)
+    }, EVENT_PULSE_DURATION_MS)
+  }, [])
+
+  const playQueuedEvent = useCallback(() => {
+    const event = eventQueueRef.current.shift()
+    if (!event) {
+      playbackActiveRef.current = false
+      playbackTimerRef.current = null
+      return
+    }
+    showGraphPulse(event)
+    playbackTimerRef.current = window.setTimeout(playQueuedEvent, EVENT_PLAYBACK_INTERVAL_MS)
+  }, [showGraphPulse])
+
+  const enqueueGraphPulse = useCallback((event: DashboardEvent) => {
+    eventQueueRef.current = [...eventQueueRef.current, event].slice(-300)
+    if (!playbackActiveRef.current) {
+      playbackActiveRef.current = true
+      playQueuedEvent()
+    }
+  }, [playQueuedEvent])
+
+  const resetGraphPlayback = useCallback(() => {
+    eventQueueRef.current = []
+    playbackActiveRef.current = false
+    if (playbackTimerRef.current) {
+      window.clearTimeout(playbackTimerRef.current)
+      playbackTimerRef.current = null
+    }
+    if (pulseTimerRef.current) {
+      window.clearTimeout(pulseTimerRef.current)
+      pulseTimerRef.current = null
+    }
+    setPulseNodeIds([])
+    setPulseEdgeIds([])
   }, [])
 
   useEffect(() => {
     void fetchState()
     return () => {
-      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current)
+      resetGraphPlayback()
     }
-  }, [fetchState])
+  }, [fetchState, resetGraphPlayback])
+
+  useEffect(() => {
+    const element = graphColumnRef.current
+    if (!element) return
+    const updateHeight = () => {
+      const width = element.clientWidth
+      const nextHeight = width > 0 ? Math.ceil(GRAPH_HEIGHT * Math.min(1, width / GRAPH_WIDTH)) : 360
+      setGraphPanelHeight(nextHeight)
+    }
+    updateHeight()
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     if (!streamEnabled) {
       setStreamStatus("off")
+      resetGraphPlayback()
       const timer = window.setInterval(() => void fetchState(), data?.refresh_interval_ms ?? 3000)
       return () => window.clearInterval(timer)
     }
@@ -129,11 +218,18 @@ export default function App() {
       setStreamStatus("reconnecting")
     }
     source.addEventListener("state", (message) => {
-      applyState(JSON.parse((message as MessageEvent<string>).data) as DashboardState)
+      const state = JSON.parse((message as MessageEvent<string>).data) as DashboardState
+      if (initialReplayUpperBoundRef.current === null) {
+        initialReplayUpperBoundRef.current = state.latest_stream_id ?? 0
+      }
+      applyState(state)
     })
     source.addEventListener("dah_event", (message) => {
       const event = JSON.parse((message as MessageEvent<string>).data) as DashboardEvent
-      pulseGraph(event)
+      const streamId = Number(event.stream_id ?? (message as MessageEvent<string>).lastEventId ?? 0)
+      const initialReplayUpperBound = initialReplayUpperBoundRef.current
+      const isInitialReplay = initialReplayUpperBound !== null && streamId > 0 && streamId <= initialReplayUpperBound
+      if (!isInitialReplay) enqueueGraphPulse(event)
       setData((current) => current ? { ...current, recent_events: mergeEvent(current.recent_events, event) } : current)
     })
     source.addEventListener("heartbeat", () => {
@@ -141,11 +237,14 @@ export default function App() {
     })
 
     return () => source.close()
-  }, [applyState, data?.refresh_interval_ms, fetchState, pulseGraph, streamEnabled])
+  }, [applyState, data?.refresh_interval_ms, enqueueGraphPulse, fetchState, resetGraphPlayback, streamEnabled])
 
   const runDemoAction = async (action: Exclude<DemoAction, null>) => {
     setRunningAction(action)
     setError(null)
+    executedStepSequenceRef.current = 0
+    setExecutedNodeTotal(0)
+    setExecutedNodeSteps([])
     try {
       const sessionId = `session-dashboard-${action}-${Date.now()}`
       let endpoint = "/scenarios/run"
@@ -209,6 +308,14 @@ export default function App() {
       { label: "Trace Nodes", value: data?.latest_run?.agent_graph.trace.length ?? 0, hint: data?.latest_run?.agent_graph.framework ?? "LangGraph" },
     ]
   }, [data])
+
+  const nodeLabelById = useMemo(() => {
+    return new Map((data?.graph.nodes ?? []).map((node) => [node.id, node.label]))
+  }, [data?.graph.nodes])
+
+  const nodeKindById = useMemo(() => {
+    return new Map((data?.graph.nodes ?? []).map((node) => [node.id, node.kind]))
+  }, [data?.graph.nodes])
 
   const health = data?.health ?? {}
   const temporalStatus = health.temporal?.ok ? "online" : health.temporal?.enabled ? "degraded" : "standby"
@@ -322,14 +429,68 @@ export default function App() {
               <Badge variant="outline">{data?.graph.nodes.length ?? 0} components</Badge>
             </CardHeader>
             <CardContent>
-              <AgentGraph
-                nodes={data?.graph.nodes ?? []}
-                edges={data?.graph.edges ?? []}
-                selectedNodeId={selectedNode?.id}
-                pulseNodeIds={pulseNodeIds}
-                pulseEdgeIds={pulseEdgeIds}
-                onSelectNode={setSelectedNode}
-              />
+              <div className="grid min-h-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_220px]">
+                <div ref={graphColumnRef} className="min-w-0">
+                  <AgentGraph
+                    nodes={data?.graph.nodes ?? []}
+                    edges={data?.graph.edges ?? []}
+                    selectedNodeId={selectedNode?.id}
+                    pulseNodeIds={pulseNodeIds}
+                    pulseEdgeIds={pulseEdgeIds}
+                    onSelectNode={setSelectedNode}
+                  />
+                </div>
+                <div
+                  className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border/80 bg-background/80"
+                  style={{ height: graphPanelHeight, maxHeight: graphPanelHeight }}
+                >
+                  <div className="flex items-center justify-between gap-2 border-b border-border/80 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">Executed Nodes</div>
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">200ms visual playback</div>
+                    </div>
+                    <Badge variant="outline" className="shrink-0">{executedNodeTotal}</Badge>
+                  </div>
+                  <ScrollArea className="min-h-0 flex-1 overflow-hidden pr-2">
+                    <div className="space-y-1.5 p-2">
+                      {executedNodeSteps.map((step, index) => {
+                        const live = step.event_id === lastLiveEvent?.event_id
+                        return (
+                          <button
+                            key={step.id}
+                            type="button"
+                            onClick={() => {
+                              const node = data?.graph.nodes.find((item) => item.id === step.node_id)
+                              if (node) setSelectedNode(node)
+                            }}
+                            className={cn(
+                              "flex w-full items-start gap-2 rounded-md border px-2 py-2 text-left transition hover:border-primary",
+                              live ? "live-event border-cyan-300/70 bg-cyan-950/35" : "border-border/70 bg-card/70",
+                            )}
+                          >
+                            <span className={cn(
+                              "mt-0.5 flex h-5 w-7 shrink-0 items-center justify-center rounded-sm text-[10px] tabular-nums",
+                              live ? "bg-cyan-300 text-slate-950" : "bg-muted text-muted-foreground",
+                            )}>
+                              {step.sequence}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-semibold">{nodeLabelById.get(step.node_id) ?? step.node_id}</span>
+                              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{step.event_type}</span>
+                              <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{nodeKindById.get(step.node_id) ?? step.source}</span>
+                            </span>
+                          </button>
+                        )
+                      })}
+                      {executedNodeSteps.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-border/80 p-3 text-xs text-muted-foreground">
+                          Run a scenario to populate this path.
+                        </div>
+                      ) : null}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </section>
