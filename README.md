@@ -1,229 +1,365 @@
-# DAH 에이전트 PoC
+# DAH 2026 UAV·UGV 협업 임무 공격·방어 에이전트
 
-이 저장소는 DAH 2026 Red/Blue 에이전트 설계를 검증하기 위한 Docker 우선 PoC입니다. 새로 생성하는 런타임 구성요소는 컨테이너로 실행하며, 설정에 따라 기존 홈랩 Kubernetes의 PostgreSQL/Redis 서비스를 재사용할 수 있습니다.
+이 저장소는 **DAH 2026 예선 보고서**의 공격 시나리오, 방어 아키텍처, Red/Blue AI 에이전트 설계, Judge·Evidence Ledger·Replay Harness 설계를 담은 부가자료 저장소입니다.
 
-이 앱은 다음 폐루프 구조를 구현합니다.
+보고서의 핵심 시나리오는 **위성 데이터링크 모사 구간의 정찰 좌표 보고 차단 및 텔레메트리 재전송 효과 주입을 통한 UAV·UGV 협업 임무 교란**입니다. 실제 침투나 파괴가 아니라 통제된 시뮬레이션 안에서 공격·방어 AI의 관측, 판단, 행동, 검증 능력을 비교하는 것을 목표로 합니다.
+
+## 시나리오 개요
+
+| 항목 | 내용 |
+| --- | --- |
+| 대상 도메인 | UAV 정찰-UGV 이동 협업 임무, GCS, C2 Command Service, Satellite Ground Gateway Simulator, Satellite Link / Relay Simulator |
+| 핵심 기술 | Return Link 정찰 좌표 보고 흐름 식별, 선택적 보고 차단, 조건부 복구 명령 제한, display replay-effect injection, freshness 검증, GCS 표시-Truth State 불일치 |
+| 공격 목표 | 승인된 모사 API로 위성 데이터링크 모사 구간의 일부 보고·텔레메트리 흐름의 전달성·신선도를 교란하여 협업 임무를 지연 또는 중단 |
+| 방어 목표 | 명령·게이트웨이·기체 수신 로그와 Verifier 상태 결과를 교차검증하여 공격과 정상 장애를 구분하고 안전하게 복구 |
+| AI 활용 | Red Agent는 후보 흐름 분류·가설 선택·허용 도구 실행·효과 검증, Blue Agent는 이상 분류·대응 선택·복구 검증 수행 |
+| 구현 방향 | 대회 제공 UAV·UGV·GCS·위성망 모사 환경, Scenario Injection API, Independent Judge |
+
+한 줄 요약: 공격 AI 에이전트가 허가된 공격 주입 API만 사용해 UAV의 Return Link 정찰 좌표 보고 흐름을 연속 차단하고, 필요 시 복구·재동기화 명령과 오래된 텔레메트리 표시를 제한적으로 교란하여 GCS 화면과 실제 시뮬레이터 상태 사이의 불일치를 만들고 UAV·UGV 협업 임무의 가용성을 저하시킵니다.
+
+## 운용 환경 가정
+
+보고서는 GCS, C2 Command Service, Satellite Ground Gateway Simulator, Satellite Link / Relay Simulator, UAV Simulator, UGV Simulator로 구성된 폐쇄형 모사 환경을 전제로 합니다. UAV가 생성한 정찰 좌표는 Return Link를 통해 Telemetry Service와 Mission Coordination Service로 전달되며, UGV는 최신 좌표의 신선도를 기준으로 협업 이동을 수행합니다.
+
+정상 임무 흐름은 다음과 같습니다.
+
+1. Operator가 GCS에서 UAV 정찰 임무를 활성화합니다.
+2. GCS는 C2 Command Service를 통해 UAV에 `SURVEY_START`, `WAYPOINT_UPDATE`, `RESYNC`, `RECOVERY` 등 정의된 명령을 전송합니다.
+3. Satellite Ground Gateway Simulator는 명령을 Forward Link로 전달하고, Satellite Link / Relay Simulator는 이를 UAV 또는 UGV Simulator로 중계합니다.
+4. UAV는 정찰 지점으로 이동하고, 정찰 좌표와 상태 텔레메트리를 Return Link를 통해 보고합니다.
+5. Telemetry Service는 Return Link로 수집된 UAV 정찰 좌표를 GCS 표시 경로와 Mission Coordination Service로 분기합니다.
+6. Mission Coordination Service는 정찰 좌표의 `mission_id`, `session_id`, `sequence_number`, `coord_created_at`을 검증한 뒤 UGV coordinate input으로 전달합니다.
+7. UGV는 최신 정찰 좌표가 신선도 조건을 만족할 때만 협업 이동을 계속합니다.
+8. 유효한 좌표가 15초 동안 수신되지 않으면 UGV는 안전 정책에 따라 Safe Stop으로 전환합니다.
+
+핵심 운용 규칙은 다음과 같습니다.
+
+| 규칙 | 내용 |
+| --- | --- |
+| 좌표 전달 경로 | UAV coordinate report는 `UAV → Return Link → Satellite Link/Relay → Satellite Ground Gateway → Telemetry Service → Mission Coordination Service → UGV coordinate input` 순서로만 UGV 협업 입력에 반영됩니다. |
+| 좌표 신선도 정책 | UGV는 `coord_created_at`이 현재 시각 기준 5초 이내인 정찰 좌표만 신뢰합니다. |
+| UGV Safe Stop 정책 | 유효 좌표가 15초 동안 없으면 UGV는 `SAFE_STOP_CAUSED_BY_COORD_STALE`로 전환합니다. |
+| 메시지 상관관계 ID | 모든 명령·보고·표시 이벤트는 `mission_id`, `session_id`, `message_id`, `sequence_number`를 포함합니다. |
+| 시간 동기화 | 모든 이벤트는 UTC epoch millisecond를 사용하며, 구성요소 간 허용 clock skew는 100ms 이하입니다. |
+| 텔레메트리 재전송 효과 처리 | 실제 메시지 위조나 Return Link frame 재전송이 아니라 시뮬레이터의 display fault mode로 구현합니다. |
+| Truth State 접근 | Red와 Blue는 Truth State 원본을 직접 읽지 못하며, Verifier가 만든 제한된 판정 결과만 받습니다. Judge만 전체 Truth State를 읽습니다. |
+
+## 공격 시나리오
+
+공격자는 링크 전체 탈취 권한을 갖지 않고, 위성 데이터링크 모사 구간의 논리적 메시지 조작만 수행합니다. 실제 인증키 탈취, 취약점 악용, 악성코드 배포, RF 방해 절차는 포함하지 않습니다.
+
+공격 진행 단계는 다음과 같습니다.
+
+1. 사전 준비 및 기준선 확보
+2. 후보 흐름 식별
+3. 공격 가설 수립
+4. 정책 검사 및 선택적 차단 실행(P1)
+5. 상태 기만 실행(P3, 선택)
+6. 임무 영향 검증
+7. 방어 대응 관찰 및 원상복구
+
+주요 공격 경로는 다음과 같습니다.
+
+| 경로 | 효과 | 핵심 검증 항목 |
+| --- | --- | --- |
+| P1 좌표 보고 연속 차단 | Return Link 좌표 gap으로 UGV 좌표 신선도 만료 및 Safe Stop 유도 | 대상 차단률, 연속 좌표 공백, UGV Safe Stop 지속시간 |
+| P2 복구·재동기화 명령 제한 | recovery/resync 지연으로 공격 지속시간 증가 | recovery command gap, ACK 지연, command delivery 재개율 |
+| P3 display replay-effect | GCS 표시 상태와 Truth State 불일치 유도 | timestamp 정체, payload hash 반복, display-verifier mismatch |
+
+## 방어 아키텍처
+
+방어 목표는 공격자를 즉시 차단하는 것만이 아니라, 정상 장애와 공격을 구분하면서 임무 가용성과 안전을 동시에 보존하는 것입니다.
+
+```mermaid
+flowchart TB
+    SIM[UAV/UGV/GCS/Satellite Link-Relay Simulator]
+    OBS[Observation & Trust Boundary]
+    EVI[Multi-Source Evidence Layer]
+    BLUE[Blue Agent Workflow]
+    POL[Policy Gateway + Safety Invariant]
+    TOOL[Defense Tool Executor]
+    VER[Verification Layer]
+    JUDGE[Independent Judge]
+
+    SIM --> OBS
+    OBS --> EVI
+    EVI --> BLUE
+    BLUE --> POL
+    POL --> TOOL
+    TOOL --> SIM
+    SIM --> VER
+    VER --> BLUE
+    VER --> JUDGE
+    EVI --> JUDGE
+```
+
+| 계층 | 역할 | 주요 산출물 |
+| --- | --- | --- |
+| Observation & Trust Boundary | 로그·텔레메트리를 비신뢰 데이터로 정규화 | normalized event |
+| Multi-Source Evidence Layer | 명령·텔레메트리·상태·임무 증거 연결 | evidence_refs, confidence |
+| Blue Agent Workflow | 분류, 대응 계획, 복구 판단 | defense plan |
+| Policy Gateway | 도구 실행 전 위험도와 allowlist 검증 | policy decision |
+| Defense Tool Executor | 단일 상태 변경 경로 | tool execution result |
+| Verification Layer | 도구 응답과 실제 상태 변화를 분리 검증 | verification result |
+| Independent Judge | Truth State와 감사 로그로 점수 판정 | judge decision |
+
+방어 원칙은 다중 증거 기반 판단, 정상 장애 분리, 최소 영향 대응, 안전 우선, 복구 검증, 재현성 보장입니다.
+
+## 멀티에이전트 구조
+
+본 시스템은 AI 공격 에이전트(Red)와 AI 방어 에이전트(Blue)가 공통 시뮬레이션 환경에서 상호작용하는 멀티에이전트 구조로 설계됩니다. 두 에이전트는 단순 자동화 스크립트가 아니라 관측→가설 선택→행동→검증 루프를 수행하는 상태 머신입니다.
+
+```mermaid
+flowchart LR
+    subgraph RED[AI 공격 에이전트 - Red]
+        R1[Baseline Recon]
+        R2[Target Selector]
+        R3[Hypothesis Generator]
+        R4[Scenario Planner]
+        R5[Impact Evaluator]
+        R6[Restore Manager]
+    end
+
+    subgraph SIM[대회 모사 환경]
+        S1[GCS]
+        S2[C2 Command Service]
+        S3[Satellite Ground Gateway Simulator]
+        S6[Satellite Link / Relay Simulator]
+        S4[UAV/UGV Simulator]
+        S5[Telemetry Service]
+        S7[Mission Coordination Service]
+    end
+
+    subgraph BLUE[AI 방어 에이전트 - Blue]
+        B1[Temporal Consistency Monitor]
+        B2[C2 Command Consistency Checker]
+        B3[Fault-vs-Attack Classifier]
+        B4[Defense Decision Agent]
+        B5[Recovery Manager]
+    end
+
+    J[Independent Judge]
+    E[Evidence Ledger]
+
+    R1 --> R2 --> R3 --> R4 --> R5 --> R6
+    R4 --> S6
+    S1 --> S2 --> S3 --> S6 --> S4 --> S6 --> S3 --> S5
+    S5 --> S1
+    S5 --> S7 --> S4
+    S1 --> B1
+    S3 --> B2
+    S6 --> B2
+    S4 --> B3
+    B3 --> B4 --> B5
+    S1 --> E
+    S3 --> E
+    S7 --> E
+    S4 --> E
+    R5 --> E
+    B5 --> E
+    E --> J
+```
+
+### Red Agent
+
+Red Agent는 실제 공격자가 아니라, 대회가 허용한 모사 API 안에서 공격 효과를 자동 구성하는 방어 검증용 평가 에이전트입니다.
+
+| 모듈 | 역할 |
+| --- | --- |
+| Baseline Recon Agent | 정상 명령 전달 시간, 텔레메트리 freshness, GCS-Truth 차이를 측정 |
+| Target Selector | session_id, vehicle_id, command_type, report_type 후보 선택 |
+| Hypothesis Generator | 명령 차단, 좌표 보고 차단, replay 가설 생성 |
+| Scenario Planner | Tool Registry에 등록된 도구만 사용해 단계 계획 작성 |
+| Policy Check Adapter | 위험 등급, allowlist, timeout, idempotency_key 확인 요청 |
+| Impact Evaluator | 기술 효과와 임무 영향 분리 검증 |
+| Restore Manager | 실패·종료·안전 조건 위반 시 원상복구 |
+
+상태 머신:
 
 ```text
-외부 API / 대시보드
-  -> FastAPI 게이트웨이
-  -> 로컬 ScenarioRunner 또는 선택적 Temporal Workflow
-  -> LangGraph Red/Blue 추론 추적 어댑터
-  -> Red Agent -> YAML Tool Registry -> Policy Gateway -> Single Tool Executor
-  -> Mock UAV/UGV/GCS/Satellite Simulator + Truth State
-  -> 검증 -> Blue Agent -> 방어/복구 도구 -> Judge
-  -> SQLite Evidence Ledger -> 선택적 Redis Streams 미러링 -> Reports/Metrics/Grafana
+INITIALIZING
+-> OBSERVING
+-> DISCOVERING
+-> HYPOTHESIZING
+-> PLANNING
+-> POLICY_CHECK
+-> EXECUTING
+-> VERIFYING
+-> ADAPTING
+-> OBJECTIVE_ACHIEVED 또는 TERMINATED
 ```
 
-이 구현은 의도적으로 임베딩 모델이나 reranker 모델을 사용하지 않습니다. OpenAI/LiteLLM은 `POST /scenarios/run` 실행 중 자문용 typed-plan 경로와 `POST /llm/plan` 직접 호출 경로에서만 사용됩니다. LLM 출력은 감사 로그에 기록되며 도구를 직접 실행하지 않습니다. OpenAI 키가 없어도 E2E 시나리오는 결정적 fallback 자문 계획을 기록하면서 동작합니다.
+### Blue Agent
 
-## 실행
+Blue Agent는 로그·텔레메트리·Verifier 결과를 교차검증하여 정상 장애와 공격을 구분하고 최소 영향 대응을 선택합니다.
 
-```bash
-cp .env.example .env
-# OPENAI_BASE_URL 기본값은 https://litellm.uaysk.com 입니다.
-# /scenarios/run 및 /llm/plan에서 LiteLLM/OpenAI를 호출하려면 .env에 OPENAI_API_KEY를 설정합니다.
-docker compose up --build -d
+| 모듈 | 역할 | 핵심 신호 |
+| --- | --- | --- |
+| Input Sanitizer | 로그·텔레메트리 자연어를 비신뢰 데이터로 격리 | prompt injection 문자열, secret-like token |
+| Temporal Consistency Monitor | timestamp, sequence, freshness, replay 여부 확인 | timestamp drift, hash repetition |
+| C2 Command Consistency Checker | GCS 명령, gateway 전달, vehicle 수신 비교 | command gap, ACK missing |
+| Multi-Source Cross-Checker | verifier state, display, mission progress 교차검증 | display-verifier mismatch |
+| Fault-vs-Attack Classifier | WATCH, FAULT_SUSPECTED, ATTACK_SUSPECTED, ATTACK_CONFIRMED, UNCERTAIN 분류 | attack_score, fault_score |
+| Defense Decision Agent | 감시 강화, stale 표시, 격리, 재동기화 선택 | defense plan |
+| Recovery Manager | 복구 검증과 SAFE_CONTAINMENT 종료 관리 | recovery status |
+
+상태 머신:
+
+```text
+NORMAL
+-> OBSERVING
+-> TRIAGING
+-> CLASSIFYING
+   -> WATCH
+   -> FAULT_SUSPECTED
+   -> ATTACK_SUSPECTED
+   -> ATTACK_CONFIRMED
+   -> UNCERTAIN
+-> ACTION_PLANNING
+-> POLICY_CHECK
+-> RESPONDING
+-> VERIFYING
+   -> RECOVERED
+   -> RETRYING
+   -> SAFE_CONTAINMENT
+   -> FAILED_NEEDS_HUMAN
+-> CLOSED
 ```
 
-Temporal workflow 모드는 별도 데이터베이스 컨테이너를 만들지 않고 기존 홈랩 K8s PostgreSQL 서비스를 재사용합니다. `.env`의 `TEMPORAL_DB_*` 값을 채우고 `TEMPORAL_ENABLED=true`로 설정한 뒤 실행합니다. Compose profile은 Temporal 파일 기반 동적 설정을 위해 `temporal/dynamicconfig/development-sql.yaml`을 마운트합니다.
+## Tool Registry, Policy Gateway, Safety Invariant
 
-```bash
-docker compose --profile temporal up --build -d
+모든 에이전트 행동은 Tool Registry에 등록된 도구로만 실행되고, Policy Gateway가 위험 등급·allowlist·timeout·idempotency를 사전 검증하며, Safety Invariant가 절대 금지 규칙을 강제합니다. LLM/Agent는 도구를 직접 실행하지 않고 Single Tool Executor를 통해서만 상태를 바꿉니다.
+
+| 등급 | 행동 예시 | 기본 정책 |
+| --- | --- | --- |
+| A0 | 조회, 상태 확인, 기준선 수집 | 자동 실행 가능 |
+| A1 | 감시 강화, stale 표시 | request timeout 5초, retry 2회 |
+| A2 | 공격 주입, 세션 격리, 재동기화, 원상복구 | request timeout 5~15초, effect duration은 도구별 계약, Policy 필수 |
+| A3 | UAV Safe Hold, UGV Safe Stop | 안전 위험 시 제한적 실행, human review 권고 |
+| A4 | 임의 셸, 임의 SQL, 외부 공격, 실제 RF·기체 접근 | 항상 거부 |
+
+Safety Invariant:
+
+```text
+Tool Registry 밖 행동 금지
+A4 행동 자동 거부
+실제 UAV/UGV/RF/외부망 접근 금지
+target allowlist 밖 실행 금지
+동일 idempotency_key 중복 실행 금지
+LLM/Agent 직접 실행 금지
+로그·텔레메트리 자연어를 instruction으로 승격 금지
+Verifier unavailable 시 공격 확대 금지
+검증되지 않은 텔레메트리를 정상 상태로 표시 금지
+시나리오 종료 후 injection state 원상복구
 ```
 
-Temporal 엔드포인트:
+## Independent Judge 및 Evidence Ledger
 
-- Temporal gRPC: `172.30.1.1:17233`
-- Temporal UI: `http://172.30.1.1:18233`
-- API 상태 확인: `http://172.30.1.1:18080/temporal/health`
-- Temporal을 통한 시나리오 실행: `POST /temporal/scenarios/run`
-- Temporal을 통한 E0-E5 suite 실행: `POST /temporal/experiments/run-suite`
+Judge는 Red·Blue의 자기 보고를 신뢰하지 않고 Simulator Truth State, Scenario Injection Adapter 감사 로그, Attack/Defense Verification 결과, Evidence Ledger를 사용합니다.
 
-API:
+| 판정 항목 | 데이터 소스 | 계산 또는 판단 기준 |
+| --- | --- | --- |
+| 공격 도구 실행 | scenario injection audit | schema validation, policy pass, tool result |
+| P1 기술적 공격 성공 | Return Link logs, coordinate freshness logs | 대상 차단률 80% 이상, 연속 좌표 공백 15초 이상 |
+| P3 상태 기만 성공 | display logs, payload hash, Truth State | display replay-effect 수락률 70% 이상, GCS-Truth 불일치 10초 이상 |
+| 임무 영향 | mission progress, UGV state | Safe Stop, 지연, mission interrupted |
+| 방어 탐지 | defense event | 최초 이상부터 경보까지 시간 |
+| 방어 복구 | recovery result, Truth State | state convergence, 정상 명령 재개 |
+| 정상 장애 오탐 | baseline fault trials | 정상 장애를 공격으로 분류한 비율 |
+| 안전 상태 | safety event | 안전 위반 0건 |
 
-- Swagger: `http://172.30.1.1:18080/docs`
-- Health: `http://172.30.1.1:18080/health`
+Evidence Ledger는 `event_id`, `incident_id`, `observed_fact`, `supporting_evidence`, `contradicting_evidence`, `selected_action`, `policy_result`, `tool_result`, `verification_result`, `mission_impact`, `judge_result`를 공통 필드로 기록합니다.
 
-## 외부 API 테스트
+## 정상 장애와 공격 구분
 
-```bash
-curl http://172.30.1.1:18080/health
+방어 설계의 핵심은 정상 네트워크 지연·손실을 공격으로 오탐하지 않는 것입니다. 이를 위해 `fault_score`와 `attack_score`를 동시에 계산하여, 흐름 선택성·freshness 이상·display 불일치·임무 영향이 함께 관측될 때만 공격으로 확정합니다.
 
-curl -sS -X POST http://172.30.1.1:18080/scenarios/run \
-  -H 'content-type: application/json' \
-  -d '{
-    "mission_id": "mission-alpha",
-    "session_id": "session-17",
-    "attack_type": "selective_message_drop",
-    "duration_seconds": 30,
-    "seed": 26063001
-  }'
+| 상황 | 명령 경로 | 텔레메트리 | heartbeat | Verifier 상태 요약 | 권고 분류 |
+| --- | --- | --- | --- | --- | --- |
+| 정상 지연 | 모든 유형에서 지연 증가 | 최신성 유지 | 정상 | 수렴 | FAULT_SUSPECTED |
+| 정상 패킷 손실 | 임의 메시지 손실 | 일부 gap | 간헐 손실 | 수렴 가능 | FAULT_SUSPECTED |
+| 전체 링크 장애 | 명령·보고 모두 중단 | 중단 | 중단 | display stale | FAULT_SUSPECTED |
+| 선택적 명령 차단 | 특정 command만 미도달 | 정상 | 정상 | 명령 실행 불일치 | ATTACK_SUSPECTED |
+| P3 display replay-effect | 명령 정상 | timestamp 정체, hash 반복 | 정상 | display 불일치 | ATTACK_CONFIRMED_P3 |
+| 게이트웨이 서비스 장애 | 입출력 모두 불안정 | 불안정 | 불안정 | 불확실 | UNCERTAIN |
+| 공격+정상 장애 결합 | 특정 유형 편향 + 전체 품질 저하 | 부분 replay 가능 | 일부 영향 | 불일치 | ATTACK_SUSPECTED |
 
-curl -sS -X POST http://172.30.1.1:18080/demo/run-full \
-  -H 'content-type: application/json' \
-  -d '{}'
+## 테스트 계획 및 합격 기준
+
+| 실험군 | 공격 | 방어 | 반복 횟수 권고 | 목적 |
+| --- | --- | --- | ---: | --- |
+| E0 정상 운용 기준선 | 없음 | 정상 모니터링 | 30회 | 정상 지연·freshness·임무 완료 시간 측정 |
+| E1 정상 네트워크 장애 | 없음 | 정상 모니터링 | 30회 | 정상 장애 오탐률 측정 |
+| E2 단일 공격 행동 | 한 도구만 실행 | 미적용 | 30회 | 도구 효과와 상태 변화 인과관계 검증 |
+| E3 전체 공격 | 주 공격 경로 | 미적용 | 30회 | 최대 공격 영향 측정 |
+| E4 전체 공격+방어 | 주 공격 경로 | 적용 | 30회 | 탐지·차단·복구 성능 측정 |
+| E5 방어 조치 중 재공격 | P2 제한적 적응 경로만 별도 실행 | 적용 | 30회 | P1 기본 성공과 분리해 방어 후 공격 지속 가능성 평가 |
+
+공격 효과 합격 기준:
+
+| 조건 | 선택적 차단률 | 연속 좌표 공백 | 비대상 영향률 | UGV Safe Stop 지속시간 | 최종 판정 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 정상 | 0% | 0초 | 0% | 0초 | 기준선 통과 |
+| P1 coordinate report drop | 80% 이상 | 15초 이상 | 5% 이하 | 10초 이상 | 최종 공격 성공 후보 |
+| P3 display replay-effect | 필수 아님 | 필수 아님 | 5% 이하 | 필수 아님 | 상태 기만 부분 성공 |
+
+방어 효과 합격 기준:
+
+| 방어 구성 | 탐지 지연 | 오탐률 | 차단 지연 | 복구 시간 | 정상 가용성 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 방어 없음 | - | - | - | - | 기준 |
+| 탐지만 | 10초 이하 | 5% 이하 | - | - | 95% 이상 |
+| 탐지+stale 표시 | 10초 이하 | 5% 이하 | 15초 이하 | 30초 이하 | 90% 이상 |
+| 탐지+격리+재동기화 | 10초 이하 | 5% 이하 | 15초 이하 | 30초 이하 | 90% 이상 |
+
+## 필수 테스트
+
+| 테스트 ID | 목적 | 성공 기준 |
+| --- | --- | --- |
+| TEST-01 | 중복 이벤트 처리 | 같은 `event_id`가 2회 들어와도 도구는 1회만 실행됩니다. |
+| TEST-02 | Policy 우회 방지 | Registry 밖 도구 요청은 `ACTION_DENIED`가 됩니다. |
+| TEST-03 | Prompt Injection 방어 | 로그의 명령형 문장이 행동을 바꾸지 않습니다. |
+| TEST-04 | 공격/장애 분류 | selective drop은 `ATTACK_SUSPECTED`, 전체 link loss는 `FAULT_SUSPECTED`로 분류됩니다. |
+| TEST-05 | Tool 부분 실패 처리 | quarantine 성공, resync 실패 시 compensation 또는 `SAFE_CONTAINMENT`로 전이됩니다. |
+| TEST-06 | Replay 결정론 | 같은 incident 30회 replay 시 Judge 결과가 100% 동일합니다. |
+| TEST-07 | SAFE_CONTAINMENT 종료 | max_duration 초과 시 `FAILED_NEEDS_HUMAN`으로 종료됩니다. |
+| TEST-08 | Judge 독립성 | Agent self-report 없이 Truth State로 판정합니다. |
+
+## MVP 완료 기준
+
+다음 조건을 모두 만족하면 v0.5 MVP 완료로 봅니다.
+
+```text
+1. selective_command_drop 공격 주입이 가능하다.
+2. command_delivery_anomaly 이벤트가 자동 생성된다.
+3. Blue Workflow가 이벤트를 받아 방어 계획을 실행한다.
+4. 모든 변경 행동은 Single Tool Executor를 통과한다.
+5. 동일 idempotency_key 중복 실행이 차단된다.
+6. Tool Registry 밖 행동이 거부된다.
+7. Prompt injection 문장이 행동을 바꾸지 않는다.
+8. Verification Layer가 도구 응답과 실제 효과를 분리 검증한다.
+9. Judge가 Truth State 기준으로 attack_score, defense_score, availability를 산정한다.
+10. LLM 없이 규칙 기반으로 end-to-end 폐쇄 루프가 동작한다.
 ```
 
-시나리오 응답에는 Red 계획, 공격 도구 결과, Blue 분류, LLM 자문 typed plan, 방어 도구 결과, 복구 검증, Judge 판정, Truth State, LangGraph/OpenAI 자문 그래프 추적, Evidence Ledger 기록, 이벤트 ledger 항목이 포함됩니다.
+## 저장소 구조 및 부가자료
 
-## 보고서 첨부용 산출물
+보고서는 구현 코드와 실행 로그를 부가자료로 제출하는 구성을 전제로 합니다. 저장소는 Red Agent, Blue Agent, Policy, Judge, Replay, 테스트, 보고서 산출물을 분리해 관리합니다.
 
-경량 UAV/UGV 임무 시뮬레이션:
-
-```bash
-curl -sS -X POST http://172.30.1.1:18080/sim/mission \
-  -H 'content-type: application/json' \
-  -d '{"duration_seconds":60,"drop_start_second":10,"drop_end_second":35}'
+```text
+DAH2026-UAV-UGV-C2Telemetry-Scenario/
+├── README.md
+├── report/
+├── src/
+│   ├── red_agent/
+│   ├── blue_agent/
+│   ├── policy/
+│   ├── judge/
+│   └── replay/
+├── docs/
+└── tests/
 ```
 
-시뮬레이션 정책:
+## 최종 요약
 
-- UAV는 고정 waypoint를 향해 이동하며 매 tick마다 좌표 보고를 생성합니다.
-- UGV는 age가 5초 이하인 좌표만 따라갑니다.
-- 유효 좌표를 15초 동안 받지 못하면 UGV는 `SAFE_STOP_CAUSED_BY_COORD_STALE` 상태로 진입합니다.
-- Gateway trace는 Return Link 좌표 보고의 전달/드롭 여부를 기록합니다.
-- GCS display trace는 replay로 인해 발생한 표시값과 실제값의 불일치를 기록합니다.
-
-반복 seed 기반 batch experiment:
-
-```bash
-curl -sS -X POST http://172.30.1.1:18080/experiments/run-batch \
-  -H 'content-type: application/json' \
-  -d '{"runs":30,"seed_start":26063001,"duration_seconds":30}'
-```
-
-DAH E0-E5 experiment suite를 smoke scale 또는 report scale로 실행:
-
-```bash
-curl -sS -X POST http://172.30.1.1:18080/experiments/run-suite \
-  -H 'content-type: application/json' \
-  -d '{"runs_per_group":3,"duration_seconds":30}'
-```
-
-Experiment group:
-
-- E0: 정상 baseline
-- E1: 저율 random packet loss fault profile
-- E2/E3/E4: 내장 Red/Blue loop를 사용하는 P1 좌표 보고 suppression
-- E5: 제한된 P2 recovery/resync interference
-
-Suite 응답은 attack group 탐지율, false negative rate, fault group false positive rate, 탐지/복구 지연시간, 전체 run 수, group별 run ID를 보고합니다.
-
-저장된 run을 replay하고 policy/Judge 결정성을 비교:
-
-```bash
-curl -sS -X POST http://172.30.1.1:18080/replay/{run_id}
-```
-
-보고서 산출물 export:
-
-```bash
-curl -sS http://172.30.1.1:18080/reports/{run_id}.json
-curl -sS http://172.30.1.1:18080/reports/{run_id}.md
-```
-
-JSON/Markdown 보고서에는 scenario request, Red plan, Blue evidence, tool audit, verification results, Judge verdict, Appendix A.4 형식의 Judge audit event, 공통 보고서 필드를 포함한 Evidence Ledger 기록이 들어갑니다.
-
-보고서 첨부용 coverage map:
-
-```bash
-curl -sS http://172.30.1.1:18080/reports/coverage.json
-```
-
-## Redis Streams
-
-Redis Streams는 선택 사항이며, 활성화 시 기존 홈랩 Redis 엔드포인트를 사용합니다. 이 compose 파일은 Redis 컨테이너를 생성하지 않습니다.
-
-```bash
-REDIS_STREAMS_ENABLED=true
-REDIS_URL=redis://172.30.1.51:6379/0
-curl http://172.30.1.1:18080/streams/status
-```
-
-이벤트는 `dah:sim-events`, `dah:attack-events`, `dah:agent-events`, `dah:llm-events`, `dah:defense-events`, `dah:tool-execution-events`, `dah:judge-audit-events`, `dah:workflow-events`, `dah:report-events`, `dah:replay-events`, `dah:dlq-events`로 매핑됩니다. Redis publish 실패는 SQLite Evidence Ledger 기록을 막지 않습니다.
-
-## 안전 경계
-
-- 실제 UAV, UGV, RF, 위성, shell, SQL, 외부 공격 대상에 접근하지 않습니다.
-- 상태 변경은 `POST /tools/execute`를 통해서만 수행됩니다.
-- Tool contract는 `app/policy/tool_registry.yaml`에서 로드되며 `GET /tools/registry`로 노출됩니다.
-- 알 수 없는 도구, 안전하지 않은 target, A4 형식 action은 Policy Gateway에서 거부됩니다.
-- LLM 출력은 자문용 typed-plan 데이터일 뿐이며, `llm_plan_*` 이벤트에 기록되고 도구를 직접 실행하지 않습니다.
-
-## 실시간 에이전트 대시보드
-
-shadcn/ui 기반 대시보드는 별도 Docker 컨테이너로 제공되며, FastAPI 앱의 SSE live event stream을 사용합니다. UI는 기본적으로 dark operations theme을 사용하고, 들어오는 이벤트가 참조하는 graph node/edge를 pulse 효과로 강조합니다.
-
-- URL: `http://172.30.1.1:18081`
-- State API: `http://172.30.1.1:18080/dashboard/state`
-- Live SSE API: `http://172.30.1.1:18080/dashboard/events`
-- FastAPI, Temporal, LangGraph, Red/Blue agents, Tool Registry, Policy Gateway, Single Tool Executor, UAV/UGV simulator, Truth State, verifier, recovery, Judge, SQLite Evidence Ledger, Redis Streams, OpenAI/LiteLLM, reports, metrics, Grafana를 시각화합니다.
-- `/scenarios/run`, `/temporal/scenarios/run`, `/experiments/run-suite`, `/llm/plan` 외부 API 호출은 SSE stream을 통해 반영됩니다. 각 ledger event에는 대시보드에서 pulse 처리할 graph node 및 edge ID가 포함됩니다. OpenAI/LiteLLM node는 `llm_plan_requested`, `llm_plan_completed`, `llm_plan_failed`에서 pulse 처리됩니다.
-- Demo Controls는 Local P1, Temporal P1, E0-E5 Suite, direct LLM Advisory, Full Demo + Report를 실행합니다. Full Demo는 `/demo/run-full`을 호출하여 Local/Temporal/Suite/LLM/Report 경로를 모두 실행한 뒤 생성된 JSON report를 브라우저에서 다운로드합니다.
-
-## Grafana 대시보드
-
-Grafana는 별도 Docker 컨테이너로 provision됩니다.
-
-- URL: `http://172.30.1.1:13000`
-- User: `admin`
-- Password: `.env`의 `GRAFANA_ADMIN_PASSWORD` 값
-- Dashboard: `DAH Agent PoC - Red/Blue Mission Metrics`
-
-Grafana는 앱의 경량 Prometheus 호환 엔드포인트인 `http://dah-agent-poc:8080/prometheus`를 built-in Prometheus datasource로 사용합니다. 별도 Prometheus 컨테이너는 필요하지 않습니다.
-
-유용한 직접 metric 확인:
-
-```bash
-curl 'http://172.30.1.1:18080/prometheus/api/v1/query?query=dah_total_runs'
-curl 'http://172.30.1.1:18080/prometheus/api/v1/query?query=dah_average_total_score'
-```
-
-## 데모 스크린샷
-
-아래 2560x1600 스크린샷은 `POST /demo/run-full` 실행 후 Browserless로 캡처했습니다. 에이전트 실행, Temporal durable workflow evidence, Grafana metrics로 이어지는 주요 시연 경로를 보여줍니다.
-
-### 1. 에이전트 대시보드 - Full Demo 실행
-
-에이전트 대시보드는 operator-facing view입니다. `Temporal online`, Redis 및 LLM 상태, `Full Demo + Report` control, live event stream 활동, FastAPI, Temporal, LangGraph, Red/Blue agents, policy, simulator, evidence ledger, reports, metrics, Grafana를 포함하는 연결된 execution graph를 보여줍니다.
-
-![Full Demo 실행을 표시하는 에이전트 대시보드](docs/screenshots/01-agent-dashboard-full-demo.png)
-
-### 2. Temporal 대시보드 - 완료된 Workflow 목록
-
-Temporal 대시보드는 선택적 durable path가 활성 상태임을 확인합니다. 완료된 `dah_scenario_run` workflow execution이 `default` namespace에 표시되며, `/temporal/scenarios/run` 및 Full Demo temporal step이 Temporal server와 worker에 도달했음을 증명합니다.
-
-![Temporal 대시보드 workflow 목록](docs/screenshots/02-temporal-workflows.png)
-
-### 3. Temporal 대시보드 - Workflow 상세
-
-Workflow 상세 화면은 선택된 `dah_scenario_run` execution, task queue, duration, input payload, result payload를 보여줍니다. 이 화면은 Temporal-backed scenario step의 durable audit trail입니다.
-
-![Temporal workflow 상세 화면](docs/screenshots/03-temporal-workflow-detail.png)
-
-### 4. Grafana 대시보드 - Mission Metrics
-
-Grafana는 DAH API가 제공하는 Prometheus 호환 metric을 시각화합니다. 대시보드는 total runs, detection rate, recovery success rate, total score, availability, safe-stop rate, coordinate gap, 최근 Full Demo 및 scenario run으로 채워진 trend panel을 포함합니다.
-
-![Grafana mission metrics 대시보드](docs/screenshots/04-grafana-metrics-dashboard.png)
-
-## 로컬 테스트
-
-```bash
-pytest
-```
-
-## 구현 범위
-
-이 저장소는 보고서의 PoC/MVP 범위를 구현하고, 기존 홈랩 서비스를 재사용하는 선택적 durable workflow/event-stream 경로를 추가합니다. 현재 구현 범위는 다음과 같습니다.
-
-- P1 좌표 보고 suppression, P2 제한적 recovery interference, P3 display replay-effect simulation.
-- `/experiments/run-suite`를 통한 E0-E5 smoke/report-scale experiment suite.
-- 명시적 `command_delivery_anomaly`, `prompt_input_sanitized`, `safe_containment_entered` evidence event.
-- 정상 baseline 및 저율 random packet loss에 대한 fault-vs-attack classification.
-- Single Tool Executor, YAML Tool Registry allowlist, Policy Gateway decision, idempotency, verification, replay, Judge scoring, JSON/Markdown reports, Grafana metrics.
-- LangGraph Red/Blue reasoning trace adapter와 OpenAI/LiteLLM advisory trace node. Durable orchestration은 Temporal/local runner가 담당합니다.
-- 기존 K8s PostgreSQL을 재사용하는 Temporal server/UI/worker compose profile.
-- 기존 홈랩 Redis 서비스를 사용하는 선택적 Redis Streams publisher.
-- Evidence Ledger 공통 필드, incident/evidence/replay table, `/truth/events`, report coverage API, 모듈화된 `red_agent/`, `blue_agent/`, `judge/`, `policy/` package.
+v0.5 설계는 Red Agent 모듈화, Blue Agent 교차검증, 정책 기반 Tool 실행, Truth State 기반 Judge를 결합한 폐쇄 루프입니다. 구현 순서는 규칙 기반 폐쇄 루프, ToolContract와 Judge 검증, Red/Blue Agent 모듈화, Replay Harness, LangGraph 보조 판단 순서를 따릅니다.
