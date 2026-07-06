@@ -1,0 +1,68 @@
+version: tool-registry-v1
+tools:
+  simulate_selective_message_drop:
+    risk_level: A2
+    aliases:
+      - simulate_selective_command_drop
+    purpose: mock Return Link coordinate-report suppression
+    timeout_seconds: 60
+    retry_attempts: 1
+    compensation: restore_attack_injection_state
+  simulate_display_replay_effect:
+    risk_level: A2
+    purpose: mock display replay-effect injection
+    timeout_seconds: 60
+    retry_attempts: 1
+    compensation: restore_attack_injection_state
+  simulate_recovery_interference:
+    risk_level: A2
+    aliases:
+      - recovery_interference
+    purpose: bounded E5 recovery/resync interference
+    timeout_seconds: 60
+    retry_attempts: 1
+    compensation: restore_attack_injection_state
+  simulate_random_packet_loss:
+    risk_level: A1
+    aliases:
+      - random_packet_loss
+    purpose: non-adversarial E1 packet-loss fault profile
+    timeout_seconds: 60
+    retry_attempts: 1
+  simulate_normal_baseline:
+    risk_level: A0
+    aliases:
+      - normal_baseline
+    purpose: E0 no-attack baseline mission trace
+    timeout_seconds: 60
+    retry_attempts: 1
+  increase_monitoring_level:
+    risk_level: A1
+    purpose: raise monitoring on the affected mock session
+    timeout_seconds: 30
+    retry_attempts: 2
+  mark_telemetry_untrusted:
+    risk_level: A1
+    purpose: mark affected telemetry stream untrusted until resync
+    timeout_seconds: 30
+    retry_attempts: 2
+  quarantine_link_session:
+    risk_level: A2
+    purpose: isolate the affected mock link session
+    timeout_seconds: 30
+    retry_attempts: 2
+  request_state_resynchronization:
+    risk_level: A2
+    purpose: request validated state resynchronization
+    timeout_seconds: 30
+    retry_attempts: 2
+  restore_attack_injection_state:
+    risk_level: A2
+    purpose: compensate and remove mock attack injection
+    timeout_seconds: 30
+    retry_attempts: 2
+  restore_validated_session:
+    risk_level: A2
+    purpose: restore normal validated session state after cleanup
+    timeout_seconds: 30
+    retry_attempts: 2

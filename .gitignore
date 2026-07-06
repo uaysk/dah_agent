@@ -1,0 +1,16 @@
+.env
+.pytest_cache/
+__pycache__/
+*.pyc
+data/
+.mypy_cache/
+.ruff_cache/
+dashboard/node_modules/
+dashboard/dist/
+npm-debug.log*
+.playwright-mcp/
+errors.log
+*snapshot*.md
+*.docx
+DAH2026_agent_design_by_JINU.md
+Final_Scenario_v2.md

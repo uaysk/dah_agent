@@ -1,0 +1,5 @@
+# Minimal file-based dynamic config for the local DAH Temporal server.
+# Values here intentionally stay conservative; app-level timeouts/retries are set in code.
+frontend.enableClientVersionCheck:
+  - value: true
+    constraints: {}
