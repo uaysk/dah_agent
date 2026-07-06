@@ -6,11 +6,19 @@
 
 ## 작동 흐름 빠른 보기
 
-아래 GIF는 browserless MCP로 Agent Dashboard, Grafana, Temporal UI를 2560x1600 뷰포트에서 연속 캡처한 뒤 README 표시용으로 1280px 너비로 인코딩한 결과입니다. Agent Dashboard의 노드 강조와 Executed Nodes 재생은 동작 과정을 쉽게 확인하기 위한 200ms 시각화 간격이며, 실제 API 실행·Temporal workflow·보고서 생성 자체를 지연시키지는 않습니다.
+아래 이미지는 browserless MCP로 Agent Dashboard, Grafana, Temporal UI를 캡처한 결과입니다. Agent Dashboard의 노드 강조와 Executed Nodes 재생은 동작 과정을 쉽게 확인하기 위한 200ms 시각화 간격이며, 실제 API 실행·Temporal workflow·보고서 생성 자체를 지연시키지는 않습니다.
 
-| Agent Dashboard | Grafana Metrics | Temporal Workflow |
-| --- | --- | --- |
-| ![Agent Dashboard flow](docs/animations/agent-dashboard-flow.gif) | ![Grafana dashboard flow](docs/animations/grafana-dashboard-flow.gif) | ![Temporal dashboard flow](docs/animations/temporal-dashboard-flow.gif) |
+Agent Dashboard는 Full Demo API 실행 중 SSE 이벤트가 그래프 노드, 링크, Executed Nodes 패널에 반영되는 과정을 1920x1200 해상도와 약 200ms 간격으로 캡처한 GIF입니다.
+
+![Agent Dashboard flow](docs/animations/agent-dashboard-flow.gif)
+
+Grafana Metrics는 실행 결과가 Prometheus 호환 API를 통해 대시보드 패널에 반영되는 상태를 보여줍니다.
+
+![Grafana dashboard flow](docs/animations/grafana-dashboard-flow.gif)
+
+Temporal Workflow는 Full Demo 중 생성된 `dah_scenario_run` workflow 목록을 보여주는 정적 캡처입니다.
+
+![Temporal workflow list](docs/animations/temporal-workflow.png)
 
 ## 시나리오 개요
 
