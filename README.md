@@ -4,6 +4,170 @@
 
 보고서의 핵심 시나리오는 **위성 데이터링크 모사 구간의 정찰 좌표 보고 차단 및 텔레메트리 재전송 효과 주입을 통한 UAV·UGV 협업 임무 교란**입니다. 실제 침투나 파괴가 아니라 통제된 시뮬레이션 안에서 공격·방어 AI의 관측, 판단, 행동, 검증 능력을 비교하는 것을 목표로 합니다.
 
+## 요구사항
+
+가장 간단한 실행 방법은 Docker Compose입니다. 기본 구성은 FastAPI, Agent Dashboard, Grafana를 실행하며 Temporal, Redis Streams, 외부 LLM은 선택 사항입니다.
+
+| 구분 | 필수 여부 | 요구사항 |
+| --- | --- | --- |
+| Git | 필수 | 저장소 복제 및 버전 관리 |
+| Docker | 권장·필수 | Docker Engine과 Docker Compose v2 플러그인 |
+| 시스템 자원 | 권장 | 기본 구성 2GB 이상, Temporal 포함 시 4GB 이상의 가용 메모리 |
+| Python | 로컬 개발 시 | Python 3.12 권장 |
+| Node.js | 대시보드 로컬 개발 시 | Node.js `^20.19.0` 또는 `>=22.12.0`, npm |
+| PostgreSQL | Temporal 사용 시 | 컨테이너에서 접근 가능한 PostgreSQL과 `temporal`, `temporal_visibility` 데이터베이스 |
+| Redis | 선택 | 컨테이너에서 접근 가능한 Redis 5 이상 |
+| OpenAI 호환 API | 선택 | LLM advisory plan을 사용할 경우 API key, base URL, model 이름 |
+
+기본 구성에서 사용하는 호스트 포트는 다음과 같습니다. 다른 프로세스가 해당 포트를 사용 중이면 `docker-compose.yml`의 포트 매핑을 변경해야 합니다.
+
+| 서비스 | 주소 |
+| --- | --- |
+| Agent Dashboard | `http://127.0.0.1:18081` |
+| FastAPI | `http://127.0.0.1:18080` |
+| Swagger UI | `http://127.0.0.1:18080/docs` |
+| Grafana | `http://127.0.0.1:13000` |
+| Temporal gRPC | `127.0.0.1:17233` |
+| Temporal UI | `http://127.0.0.1:18233` |
+
+## 설치 방법
+
+### 1. Docker Compose로 기본 구성 실행
+
+저장소를 복제합니다.
+
+```bash
+git clone https://github.com/uaysk/dah_agent.git
+cd dah_agent
+```
+
+프로젝트 루트에 `.env` 파일을 만들고 최소한 Grafana 관리자 비밀번호를 설정합니다. `.env`는 Git에 포함하면 안 됩니다.
+
+```dotenv
+GRAFANA_ADMIN_PASSWORD=change-this-password
+
+# 선택: 외부에 노출되는 보고서 URL의 기준 주소
+PUBLIC_BASE_URL=http://127.0.0.1:18080
+
+# 선택: LLM을 사용하지 않으면 비워 둡니다.
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://your-openai-compatible-endpoint.example
+OPENAI_MODEL=your-model-name
+OPENAI_REASONING_EFFORT=low
+
+# 기본 실행에서는 비활성화합니다.
+TEMPORAL_ENABLED=false
+REDIS_STREAMS_ENABLED=false
+```
+
+기본 서비스를 빌드하고 실행합니다.
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+API와 대시보드 상태를 확인합니다.
+
+```bash
+curl http://127.0.0.1:18080/health
+curl http://127.0.0.1:18080/dashboard/state
+```
+
+전체 데모는 다음 API로 실행할 수 있습니다. Temporal이 비활성화된 기본 구성에서는 Temporal 단계만 실패로 기록되고 나머지 로컬 시나리오, E0~E5 suite, LLM fallback, 보고서 생성은 계속 실행됩니다.
+
+```bash
+curl -X POST http://127.0.0.1:18080/demo/run-full \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+서비스를 종료할 때는 다음 명령을 사용합니다. SQLite 실행 데이터는 `data/`에 유지됩니다.
+
+```bash
+docker compose down
+```
+
+### 2. Temporal 구성 활성화
+
+Temporal은 선택적 durable workflow 경로입니다. 먼저 PostgreSQL에 `temporal`, `temporal_visibility` 데이터베이스를 준비하고, Docker 컨테이너에서 접근 가능한 주소와 계정을 `.env`에 설정합니다. 이 계정에는 Temporal schema를 초기화할 권한이 있어야 합니다.
+
+```dotenv
+TEMPORAL_ENABLED=true
+TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=dah-agent-task-queue
+
+TEMPORAL_DB_HOST=postgres.example.internal
+TEMPORAL_DB_PORT=5432
+TEMPORAL_DB_USER=temporal
+TEMPORAL_DB_PASSWORD=change-this-password
+TEMPORAL_DB_NAME=temporal
+TEMPORAL_VISIBILITY_DB_NAME=temporal_visibility
+```
+
+Temporal server, UI, worker를 포함해 실행합니다.
+
+```bash
+docker compose --profile temporal up --build -d
+curl http://127.0.0.1:18080/temporal/health
+```
+
+Temporal UI는 `http://127.0.0.1:18233`에서 확인할 수 있습니다.
+
+### 3. Redis Streams 활성화
+
+Redis Streams는 SQLite Evidence Ledger의 best-effort event mirror입니다. Redis 장애가 시나리오 실행을 중단시키지는 않습니다. `REDIS_URL`에는 컨테이너 내부의 `localhost`가 아니라 컨테이너에서 실제로 접근 가능한 DNS 이름 또는 IP를 사용해야 합니다.
+
+```dotenv
+REDIS_STREAMS_ENABLED=true
+REDIS_URL=redis://redis.example.internal:6379/0
+REDIS_STREAM_PREFIX=dah
+REDIS_STREAM_MAXLEN=10000
+```
+
+설정을 변경한 뒤 애플리케이션과 worker를 다시 생성합니다.
+
+```bash
+docker compose --profile temporal up --build -d --force-recreate dah-agent-poc temporal-worker
+curl http://127.0.0.1:18080/streams/status
+```
+
+Temporal을 사용하지 않는 경우에는 다음 명령으로 API만 다시 생성하면 됩니다.
+
+```bash
+docker compose up --build -d --force-recreate dah-agent-poc
+```
+
+### 4. 로컬 개발 환경
+
+FastAPI와 테스트를 Docker 없이 실행하려면 Python 가상환경을 사용합니다.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+mkdir -p data
+uvicorn app.main:app --reload --host 0.0.0.0 --port 18080
+```
+
+테스트는 프로젝트 루트에서 실행합니다.
+
+```bash
+pytest -q
+```
+
+대시보드를 개발 모드로 실행하려면 별도 터미널에서 다음 명령을 사용합니다.
+
+```bash
+cd dashboard
+npm ci
+VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev
+```
+
+개발 서버는 `http://127.0.0.1:5173`에서 열립니다. 프로덕션 Docker 대시보드는 Nginx의 same-origin proxy를 사용하므로 `VITE_API_BASE_URL` 설정이 필요하지 않습니다.
+
 ## 핵심 평가 목표
 
 대회 관점의 핵심은 **Red Agent가 허용된 공격 주입 API만으로 목표 임무 영향을 얼마나 안정적으로 만들어내는지**와 **Blue Agent가 그 공격을 얼마나 정확히 탐지·완화·복구하는지**입니다. 따라서 본 저장소의 시뮬레이션, Judge, Evidence Ledger, 대시보드는 모두 아래 두 축을 중심으로 결과를 산출합니다.
