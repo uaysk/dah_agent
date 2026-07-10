@@ -17,11 +17,11 @@ export function EventTimeline({ events, liveEventId }: { events: DashboardEvent[
         {events.slice().reverse().map((event) => {
           const live = event.event_id === liveEventId
           return (
-            <div key={event.event_id} className={cn("rounded-md border bg-card p-3 transition", live && "live-event border-cyan-300/70 bg-cyan-950/30")}>
+            <div key={event.event_id} className={cn("rounded-md border border-l-2 bg-card p-3 transition-colors", live ? "live-event border-zinc-300 bg-zinc-800" : "border-l-zinc-600")}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
-                    {live ? <Zap className="h-3.5 w-3.5 shrink-0 text-cyan-200" /> : null}
+                    {live ? <Zap className="h-3.5 w-3.5 shrink-0 text-zinc-100" /> : null}
                     <div className="truncate text-sm font-medium">{event.event_type}</div>
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{event.source}</div>
@@ -31,9 +31,9 @@ export function EventTimeline({ events, liveEventId }: { events: DashboardEvent[
                   {formatTime(event.occurred_at)}
                 </Badge>
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-1 text-[11px] text-muted-foreground">
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t pt-2 text-[10px] text-muted-foreground">
                 {Object.entries(event.payload_summary).slice(0, 6).map(([key, value]) => (
-                  <div key={key} className="truncate rounded bg-muted px-2 py-1">
+                  <div key={key} className="truncate py-0.5">
                     <span className="font-medium text-foreground/80">{key}</span>: {String(value)}
                   </div>
                 ))}

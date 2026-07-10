@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>그림 4-1. DAH 공격·방어 멀티에이전트 실제 구조</title>
+    <style>
+      :root {
+        --background: #ffffff;
+        --foreground: #1f2937;
+        --muted: #64748b;
+        --border: #cbd5e1;
+        --line: #516784;
+        --line-muted: #8b99aa;
+        --red: #cf4d4d;
+        --red-bg: #fff4f3;
+        --blue: #2f73b7;
+        --blue-bg: #f1f6fc;
+        --green: #2e8a5f;
+        --green-bg: #f0f8f4;
+        --violet: #7151c7;
+        --violet-bg: #f7f4ff;
+        --amber: #b77718;
+        --amber-bg: #fff8e8;
+        --slate-bg: #f7f8fa;
+        --card: #ffffff;
+        --radius: 7px;
+        --shadow: 0 2px 5px rgb(15 23 42 / 7%);
+      }
+
+      * {
+        box-sizing: border-box;
+        letter-spacing: 0;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #e8edf2;
+        color: var(--foreground);
+        font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", Inter, Arial, sans-serif;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      #viewport {
+        width: 100vw;
+        height: 100vh;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+
+      #scale-shell {
+        position: relative;
+        flex: none;
+      }
+
+      #artboard {
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 1800px;
+        height: 1120px;
+        overflow: hidden;
+        transform-origin: top left;
+        background: var(--background);
+      }
+
+      .page-header {
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 110px;
+        padding: 30px 48px 20px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      .title-group h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.25;
+        font-weight: 700;
+      }
+
+      .title-group p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .header-tools {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding-top: 2px;
+      }
+
+      .legend {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        color: #526173;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .legend-line {
+        width: 28px;
+        height: 0;
+        border-top: 2px solid var(--line);
+      }
+
+      .legend-line.advisory {
+        border-top-style: dashed;
+        border-color: var(--line-muted);
+      }
+
+      .mode-control {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: #f8fafc;
+        box-shadow: var(--shadow);
+      }
+
+      .mode-button {
+        min-width: 64px;
+        height: 30px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: #64748b;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .mode-button:hover {
+        color: #1f2937;
+      }
+
+      .mode-button[aria-pressed="true"] {
+        color: #1f2937;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgb(15 23 42 / 12%);
+      }
+
+      #diagram {
+        position: absolute;
+        inset: 110px 0 0;
+        width: 1800px;
+        height: 1010px;
+      }
+
+      .layer {
+        position: absolute;
+        z-index: 1;
+        border: 2px solid;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .layer::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 48px;
+        border-bottom: 1px solid rgb(100 116 139 / 18%);
+        background: rgb(255 255 255 / 38%);
+      }
+
+      .layer-heading {
+        position: absolute;
+        z-index: 2;
+        top: 13px;
+        left: 20px;
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+      }
+
+      .layer-title {
+        font-size: 17px;
+        line-height: 1.2;
+        font-weight: 700;
+      }
+
+      .layer-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.2;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      .layer[data-tone="orchestration"] {
+        border-color: var(--blue);
+        background: var(--blue-bg);
+      }
+
+      .layer[data-tone="red"] {
+        border-color: var(--red);
+        background: var(--red-bg);
+      }
+
+      .layer[data-tone="control"] {
+        border-color: var(--violet);
+        background: var(--violet-bg);
+      }
+
+      .layer[data-tone="blue"] {
+        border-color: var(--green);
+        background: var(--green-bg);
+      }
+
+      .layer[data-tone="evidence"] {
+        border-color: var(--amber);
+        background: var(--amber-bg);
+      }
+
+      .node {
+        position: absolute;
+        z-index: 4;
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        justify-content: center;
+        padding: 8px 13px;
+        border: 1px solid #b9c5d3;
+        border-left-width: 4px;
+        border-radius: var(--radius);
+        background: var(--card);
+        box-shadow: var(--shadow);
+        transition: opacity 140ms ease, border-color 140ms ease, background-color 140ms ease;
+      }
+
+      .node[data-tone="red"] {
+        border-left-color: var(--red);
+      }
+
+      .node[data-tone="blue"] {
+        border-left-color: var(--green);
+      }
+
+      .node[data-tone="orchestration"] {
+        border-left-color: var(--blue);
+      }
+
+      .node[data-tone="control"] {
+        border-left-color: var(--violet);
+      }
+
+      .node[data-tone="mission"] {
+        border-left-color: #337e9c;
+        background: #fbfeff;
+      }
+
+      .node[data-tone="evidence"] {
+        border-left-color: var(--amber);
+        background: #fffefa;
+      }
+
+      .node[data-tone="observability"] {
+        border-left-color: #64748b;
+        background: var(--slate-bg);
+      }
+
+      .node-label {
+        overflow: hidden;
+        color: #202c3b;
+        font-size: 14px;
+        line-height: 1.2;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .node-meta {
+        margin-top: 5px;
+        overflow: hidden;
+        color: #64748b;
+        font-size: 10.5px;
+        line-height: 1.2;
+        font-weight: 500;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .node[data-compact="true"] {
+        padding: 6px 10px;
+      }
+
+      .node[data-compact="true"] .node-label {
+        font-size: 12px;
+      }
+
+      .node[data-compact="true"] .node-meta {
+        margin-top: 3px;
+        font-size: 9.5px;
+      }
+
+      .node.is-muted {
+        opacity: 0.22;
+      }
+
+      .node.is-related {
+        border-color: #4b607a;
+        background: #ffffff;
+      }
+
+      #edges {
+        position: absolute;
+        z-index: 3;
+        inset: 0;
+        width: 1800px;
+        height: 1010px;
+        overflow: visible;
+        pointer-events: none;
+      }
+
+      .edge {
+        fill: none;
+        stroke: var(--line);
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        marker-end: url(#arrow-solid);
+        transition: opacity 140ms ease, stroke-width 140ms ease;
+      }
+
+      .edge[data-kind="advisory"],
+      .edge[data-kind="mirror"] {
+        stroke: var(--line-muted);
+        stroke-width: 1.5;
+        stroke-dasharray: 6 6;
+        marker-end: url(#arrow-muted);
+      }
+
+      .edge[data-kind="feedback"] {
+        stroke: #55758a;
+        stroke-dasharray: 3 5;
+      }
+
+      .edge.is-muted {
+        opacity: 0.12;
+      }
+
+      .edge.is-related {
+        stroke-width: 3;
+        opacity: 1;
+      }
+
+      .edge-label {
+        position: absolute;
+        z-index: 5;
+        padding: 3px 7px;
+        border: 1px solid #d8e0e8;
+        border-radius: 5px;
+        background: rgb(255 255 255 / 94%);
+        color: #526173;
+        font-size: 9.5px;
+        line-height: 1;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .note-strip {
+        position: absolute;
+        z-index: 2;
+        left: 520px;
+        top: 578px;
+        width: 760px;
+        height: 78px;
+        padding: 14px 18px;
+        border: 1px solid #d5c8f0;
+        border-radius: var(--radius);
+        background: rgb(255 255 255 / 67%);
+      }
+
+      .note-title {
+        margin: 0;
+        color: #5538a7;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .note-text {
+        margin: 7px 0 0;
+        color: #586579;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      @media print {
+        html,
+        body,
+        #viewport {
+          width: 1800px;
+          height: 1120px;
+          background: #ffffff;
+        }
+
+        #artboard {
+          transform: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewport">
+      <div id="scale-shell">
+        <main id="artboard" aria-label="DAH 공격·방어 멀티에이전트 실제 구조도">
+          <header class="page-header">
+            <div class="title-group">
+              <h1>DAH 공격·방어 멀티에이전트 실제 구조</h1>
+              <p>FastAPI · Temporal · LangGraph · Policy Gateway · Mission Simulator · Independent Judge</p>
+            </div>
+            <div class="header-tools">
+              <div class="legend" aria-label="연결선 범례">
+                <span class="legend-item"><span class="legend-line"></span>실행·데이터 흐름</span>
+                <span class="legend-item"><span class="legend-line advisory"></span>자문·미러링</span>
+              </div>
+              <div class="mode-control" role="group" aria-label="흐름 보기">
+                <button class="mode-button" type="button" data-mode="all" aria-pressed="true">전체</button>
+                <button class="mode-button" type="button" data-mode="red" aria-pressed="false">공격</button>
+                <button class="mode-button" type="button" data-mode="blue" aria-pressed="false">방어</button>
+                <button class="mode-button" type="button" data-mode="judge" aria-pressed="false">판정</button>
+              </div>
+            </div>
+          </header>
+          <section id="diagram" aria-label="에이전트 구성요소 연결 그래프">
+            <svg id="edges" viewBox="0 0 1800 1010" role="img" aria-label="구성요소 연결선">
+              <defs>
+                <marker id="arrow-solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#516784"></path>
+                </marker>
+                <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b99aa"></path>
+                </marker>
+              </defs>
+            </svg>
+            <div id="layers"></div>
+            <div id="nodes"></div>
+            <div id="edge-labels"></div>
+            <aside class="note-strip" aria-label="실행 경계 설명">
+              <p class="note-title">실행 경계</p>
+              <p class="note-text">LangGraph는 Red·Blue 추론 흔적과 계획 일관성을 기록하고, OpenAI는 구조화된 자문 계획만 생성한다. 모든 상태 변경은 등록된 도구와 정책 검사를 거쳐 Single Tool Executor에서만 수행된다.</p>
+            </aside>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const layers = [
+        { id: "orchestration", title: "오케스트레이션 및 인터페이스", kicker: "API · DURABLE WORKFLOW · REASONING TRACE", tone: "orchestration", x: 48, y: 12, w: 1704, h: 148 },
+        { id: "red-layer", title: "공격 에이전트 · Red", kicker: "ALLOWED SIMULATION ATTACK", tone: "red", x: 48, y: 184, w: 420, h: 520 },
+        { id: "control-layer", title: "정책 통제 및 임무 모사", kicker: "TRUST · POLICY · SIMULATOR", tone: "control", x: 500, y: 184, w: 800, h: 520 },
+        { id: "blue-layer", title: "방어 에이전트 · Blue", kicker: "DETECT · CONTAIN · RECOVER", tone: "blue", x: 1332, y: 184, w: 420, h: 520 },
+        { id: "evidence-layer", title: "독립 판정 · 증거 · 보고 · 관측", kicker: "TRUTH-BASED JUDGEMENT & REPLAY", tone: "evidence", x: 48, y: 732, w: 1704, h: 230 },
+      ]
+
+      const nodes = [
+        { id: "external", label: "외부 API / Dashboard", meta: "HTTPS request · report download", tone: "orchestration", x: 78, y: 76, w: 190, h: 56, groups: ["red", "blue", "judge"] },
+        { id: "fastapi", label: "FastAPI Gateway", meta: "REST · SSE · validation", tone: "orchestration", x: 302, y: 76, w: 180, h: 56, groups: ["red", "blue", "judge"] },
+        { id: "temporal", label: "Temporal Workflow", meta: "durable execution · PostgreSQL", tone: "orchestration", x: 520, y: 51, w: 190, h: 48, compact: true, groups: ["red", "blue"] },
+        { id: "local-runner", label: "Local API Mode", meta: "direct fallback path", tone: "orchestration", x: 520, y: 105, w: 190, h: 48, compact: true, groups: ["red", "blue"] },
+        { id: "scenario-runner", label: "ScenarioRunner", meta: "single closed-loop runtime", tone: "orchestration", x: 754, y: 76, w: 190, h: 56, groups: ["red", "blue", "judge"] },
+        { id: "langgraph", label: "LangGraph Adapter", meta: "reasoning trace · consistency", tone: "orchestration", x: 988, y: 76, w: 200, h: 56, groups: ["red", "blue"] },
+        { id: "openai", label: "OpenAI Planner", meta: "typed advisory · no direct tools", tone: "orchestration", x: 1232, y: 76, w: 200, h: 56, groups: ["red", "blue"] },
+        { id: "event-stream", label: "Live Event Stream", meta: "SSE · dashboard state", tone: "observability", x: 1476, y: 76, w: 226, h: 56, groups: ["red", "blue", "judge"] },
+
+        { id: "red-observe", label: "red.observe", meta: "baseline · mission context", tone: "red", x: 84, y: 248, w: 348, h: 56, groups: ["red"] },
+        { id: "red-hypothesis", label: "red.generate_hypothesis", meta: "P1 · P2/E5 · P3 candidate", tone: "red", x: 84, y: 320, w: 348, h: 56, groups: ["red"] },
+        { id: "red-plan", label: "red.plan_attack", meta: "registered injection selection", tone: "red", x: 84, y: 392, w: 348, h: 56, groups: ["red"] },
+        { id: "red-build", label: "RedAgent.build_plan", meta: "typed ToolExecutionRequest", tone: "red", x: 84, y: 464, w: 348, h: 56, groups: ["red"] },
+        { id: "red-impact", label: "Impact Result", meta: "technical · mission effect", tone: "red", x: 84, y: 536, w: 348, h: 56, groups: ["red", "judge"] },
+        { id: "red-restore", label: "Restore Injection", meta: "compensation · closed state", tone: "red", x: 84, y: 608, w: 348, h: 56, groups: ["red", "blue"] },
+
+        { id: "trust-boundary", label: "Input Trust Boundary", meta: "sanitize · redact · normalize", tone: "control", x: 536, y: 248, w: 230, h: 60, groups: ["red", "blue"] },
+        { id: "multi-evidence", label: "Multi-Source Evidence", meta: "C2 · telemetry · mission state", tone: "evidence", x: 786, y: 248, w: 230, h: 60, groups: ["blue", "judge"] },
+        { id: "verifier", label: "Verification Layer", meta: "impact · recovery convergence", tone: "evidence", x: 1036, y: 248, w: 228, h: 60, groups: ["red", "blue", "judge"] },
+
+        { id: "registry", label: "Tool Registry", meta: "YAML allowlist", tone: "control", x: 536, y: 360, w: 170, h: 58, groups: ["red", "blue"] },
+        { id: "safety", label: "Safety Invariant", meta: "hard constraints", tone: "control", x: 726, y: 360, w: 170, h: 58, groups: ["red", "blue"] },
+        { id: "policy", label: "Policy Gateway", meta: "risk · target · precondition", tone: "control", x: 916, y: 360, w: 170, h: 58, groups: ["red", "blue"] },
+        { id: "executor", label: "Single Tool Executor", meta: "only mutation boundary", tone: "control", x: 1106, y: 360, w: 170, h: 58, groups: ["red", "blue"] },
+
+        { id: "gcs", label: "GCS / C2 Service", meta: "command · coordination", tone: "mission", x: 536, y: 474, w: 170, h: 60, groups: ["red", "blue"] },
+        { id: "satellite", label: "Satellite Gateway", meta: "link · relay · telemetry", tone: "mission", x: 726, y: 474, w: 170, h: 60, groups: ["red", "blue"] },
+        { id: "simulator", label: "UAV / UGV Simulator", meta: "mission dynamics", tone: "mission", x: 916, y: 474, w: 170, h: 60, groups: ["red", "blue", "judge"] },
+        { id: "truth", label: "Truth State", meta: "judge-trusted ground truth", tone: "evidence", x: 1106, y: 474, w: 170, h: 60, groups: ["red", "blue", "judge"] },
+
+        { id: "blue-observe", label: "blue.observe_evidence", meta: "freshness · command gap", tone: "blue", x: 1368, y: 248, w: 348, h: 56, groups: ["blue"] },
+        { id: "blue-classify", label: "BlueAgent.classify", meta: "fault vs attack scoring", tone: "blue", x: 1368, y: 320, w: 348, h: 56, groups: ["blue"] },
+        { id: "blue-plan", label: "BlueAgent.plan", meta: "least-impact defense actions", tone: "blue", x: 1368, y: 392, w: 348, h: 56, groups: ["blue"] },
+        { id: "blue-graph-plan", label: "blue.plan_defense", meta: "trace · action consistency", tone: "blue", x: 1368, y: 464, w: 348, h: 56, groups: ["blue"] },
+        { id: "blue-recovery-gate", label: "blue.recovery_gate", meta: "resync · safe containment", tone: "blue", x: 1368, y: 536, w: 348, h: 56, groups: ["blue"] },
+        { id: "blue-recovery", label: "Recovery Manager", meta: "restore · verify · close", tone: "blue", x: 1368, y: 608, w: 348, h: 56, groups: ["blue", "judge"] },
+
+        { id: "judge", label: "Independent Judge", meta: "Truth State · audit verdict", tone: "evidence", x: 82, y: 798, w: 250, h: 62, groups: ["red", "blue", "judge"] },
+        { id: "ledger", label: "Evidence Ledger", meta: "SQLite · linked audit records", tone: "evidence", x: 404, y: 798, w: 250, h: 62, groups: ["red", "blue", "judge"] },
+        { id: "reports", label: "Reports / Replay", meta: "coverage · deterministic replay", tone: "evidence", x: 726, y: 798, w: 250, h: 62, groups: ["red", "blue", "judge"] },
+        { id: "metrics", label: "Prometheus Metrics", meta: "score · latency · recovery", tone: "observability", x: 1048, y: 798, w: 250, h: 62, groups: ["judge"] },
+        { id: "grafana", label: "Grafana Dashboard", meta: "experiment observability", tone: "observability", x: 1370, y: 798, w: 250, h: 62, groups: ["judge"] },
+        { id: "score", label: "Scoreboard", meta: "(attack + defense) × availability", tone: "evidence", x: 82, y: 886, w: 250, h: 48, compact: true, groups: ["judge"] },
+        { id: "redis", label: "Redis Streams", meta: "optional best-effort mirror", tone: "observability", x: 404, y: 886, w: 250, h: 48, compact: true, groups: ["judge"] },
+        { id: "download", label: "JSON / Markdown Result", meta: "external report download", tone: "observability", x: 726, y: 886, w: 250, h: 48, compact: true, groups: ["judge"] },
+      ]
+
+      const edges = [
+        { id: "external-fastapi", from: "external", to: "fastapi", groups: ["red", "blue", "judge"] },
+        { id: "fastapi-temporal", from: "fastapi", to: "temporal", fromAnchor: "right", toAnchor: "left", points: [[500, 104], [500, 75]], groups: ["red", "blue"] },
+        { id: "fastapi-local", from: "fastapi", to: "local-runner", fromAnchor: "right", toAnchor: "left", points: [[500, 104], [500, 129]], groups: ["red", "blue"] },
+        { id: "temporal-runner", from: "temporal", to: "scenario-runner", fromAnchor: "right", toAnchor: "left", points: [[732, 75], [732, 104]], groups: ["red", "blue"] },
+        { id: "local-runner-core", from: "local-runner", to: "scenario-runner", fromAnchor: "right", toAnchor: "left", points: [[732, 129], [732, 104]], groups: ["red", "blue"] },
+        { id: "runner-langgraph", from: "scenario-runner", to: "langgraph", groups: ["red", "blue"] },
+        { id: "runner-openai", from: "scenario-runner", to: "openai", kind: "advisory", fromAnchor: "top", toAnchor: "top", points: [[849, 36], [1332, 36]], groups: ["red", "blue"], label: "Typed advisory", labelAt: [1055, 29] },
+        { id: "runner-events", from: "scenario-runner", to: "event-stream", kind: "mirror", fromAnchor: "top", toAnchor: "top", points: [[849, 20], [1589, 20]], groups: ["red", "blue", "judge"] },
+        { id: "openai-langgraph", from: "openai", to: "langgraph", kind: "advisory", fromAnchor: "left", toAnchor: "right", groups: ["red", "blue"] },
+
+        { id: "langgraph-red", from: "langgraph", to: "red-observe", fromAnchor: "bottom", toAnchor: "top", points: [[1088, 171], [258, 171]], groups: ["red"], label: "Red trace", labelAt: [492, 164] },
+        { id: "langgraph-blue", from: "langgraph", to: "blue-observe", fromAnchor: "bottom", toAnchor: "top", points: [[1088, 171], [1542, 171]], groups: ["blue"], label: "Blue trace", labelAt: [1206, 164] },
+        { id: "runner-trust", from: "scenario-runner", to: "trust-boundary", fromAnchor: "bottom", toAnchor: "top", points: [[849, 171], [651, 171]], groups: ["red", "blue"] },
+        { id: "trust-evidence", from: "trust-boundary", to: "multi-evidence", groups: ["blue", "judge"] },
+
+        { id: "red-1", from: "red-observe", to: "red-hypothesis", fromAnchor: "bottom", toAnchor: "top", groups: ["red"] },
+        { id: "red-2", from: "red-hypothesis", to: "red-plan", fromAnchor: "bottom", toAnchor: "top", groups: ["red"] },
+        { id: "red-3", from: "red-plan", to: "red-build", fromAnchor: "bottom", toAnchor: "top", groups: ["red"] },
+        { id: "red-build-registry", from: "red-build", to: "registry", fromAnchor: "right", toAnchor: "left", points: [[482, 492], [482, 389]], groups: ["red"], label: "attack plan", labelAt: [463, 425] },
+        { id: "red-restore-registry", from: "red-restore", to: "registry", fromAnchor: "right", toAnchor: "left", points: [[484, 636], [484, 440], [621, 440]], groups: ["red", "blue"] },
+
+        { id: "registry-safety", from: "registry", to: "safety", groups: ["red", "blue"] },
+        { id: "safety-policy", from: "safety", to: "policy", groups: ["red", "blue"] },
+        { id: "policy-executor", from: "policy", to: "executor", groups: ["red", "blue"] },
+        { id: "executor-gcs", from: "executor", to: "gcs", fromAnchor: "bottom", toAnchor: "top", points: [[1191, 446], [621, 446]], groups: ["red", "blue"], label: "allowed tool", labelAt: [884, 439] },
+        { id: "gcs-satellite", from: "gcs", to: "satellite", groups: ["red", "blue"] },
+        { id: "satellite-simulator", from: "satellite", to: "simulator", groups: ["red", "blue"] },
+        { id: "simulator-truth", from: "simulator", to: "truth", groups: ["red", "blue", "judge"] },
+        { id: "truth-verifier", from: "truth", to: "verifier", fromAnchor: "right", toAnchor: "right", points: [[1290, 504], [1290, 278]], groups: ["red", "blue", "judge"] },
+        { id: "verifier-red-impact", from: "verifier", to: "red-impact", fromAnchor: "right", toAnchor: "right", points: [[1308, 278], [1308, 566], [482, 566]], groups: ["red", "judge"] },
+        { id: "verifier-blue", from: "verifier", to: "blue-observe", groups: ["blue"] },
+
+        { id: "blue-1", from: "blue-observe", to: "blue-classify", fromAnchor: "bottom", toAnchor: "top", groups: ["blue"] },
+        { id: "blue-2", from: "blue-classify", to: "blue-plan", fromAnchor: "bottom", toAnchor: "top", groups: ["blue"] },
+        { id: "blue-3", from: "blue-plan", to: "blue-graph-plan", fromAnchor: "bottom", toAnchor: "top", groups: ["blue"] },
+        { id: "blue-4", from: "blue-graph-plan", to: "blue-recovery-gate", fromAnchor: "bottom", toAnchor: "top", groups: ["blue"] },
+        { id: "blue-5", from: "blue-recovery-gate", to: "blue-recovery", fromAnchor: "bottom", toAnchor: "top", groups: ["blue"] },
+        { id: "blue-plan-registry", from: "blue-plan", to: "registry", fromAnchor: "left", toAnchor: "top", points: [[1312, 420], [1312, 332], [621, 332]], groups: ["blue"], label: "defense actions", labelAt: [1124, 325] },
+        { id: "blue-recovery-registry", from: "blue-recovery", to: "registry", fromAnchor: "left", toAnchor: "bottom", points: [[1314, 636], [1314, 670], [500, 670], [500, 439], [621, 439]], groups: ["blue"] },
+
+        { id: "truth-judge", from: "truth", to: "judge", fromAnchor: "bottom", toAnchor: "left", points: [[1191, 714], [56, 714], [56, 829]], groups: ["red", "blue", "judge"], label: "trusted truth", labelAt: [585, 707] },
+        { id: "verifier-judge", from: "verifier", to: "judge", fromAnchor: "bottom", toAnchor: "left", points: [[1308, 308], [1308, 696], [36, 696], [36, 829]], groups: ["judge"] },
+        { id: "judge-score", from: "judge", to: "score", fromAnchor: "bottom", toAnchor: "top", groups: ["judge"] },
+        { id: "judge-ledger", from: "judge", to: "ledger", groups: ["red", "blue", "judge"] },
+        { id: "ledger-reports", from: "ledger", to: "reports", groups: ["red", "blue", "judge"] },
+        { id: "reports-metrics", from: "reports", to: "metrics", groups: ["judge"] },
+        { id: "metrics-grafana", from: "metrics", to: "grafana", groups: ["judge"] },
+        { id: "ledger-redis", from: "ledger", to: "redis", fromAnchor: "bottom", toAnchor: "top", kind: "mirror", groups: ["judge"] },
+        { id: "reports-download", from: "reports", to: "download", fromAnchor: "bottom", toAnchor: "top", groups: ["judge"] },
+        { id: "events-external", from: "event-stream", to: "external", fromAnchor: "right", toAnchor: "left", kind: "mirror", points: [[1736, 104], [1736, 170], [60, 170], [60, 104]], groups: ["red", "blue", "judge"] },
+      ]
+
+      const nodeById = new Map(nodes.map((node) => [node.id, node]))
+      const layerRoot = document.querySelector("#layers")
+      const nodeRoot = document.querySelector("#nodes")
+      const edgeRoot = document.querySelector("#edges")
+      const edgeLabelRoot = document.querySelector("#edge-labels")
+
+      function renderLayers() {
+        layers.forEach((layer) => {
+          const element = document.createElement("section")
+          element.className = "layer"
+          element.dataset.tone = layer.tone
+          element.style.left = `${layer.x}px`
+          element.style.top = `${layer.y}px`
+          element.style.width = `${layer.w}px`
+          element.style.height = `${layer.h}px`
+          element.innerHTML = `<div class="layer-heading"><span class="layer-title">${layer.title}</span><span class="layer-kicker">${layer.kicker}</span></div>`
+          layerRoot.appendChild(element)
+        })
+      }
+
+      function renderNodes() {
+        nodes.forEach((node) => {
+          const element = document.createElement("article")
+          element.id = `node-${node.id}`
+          element.className = "node"
+          element.dataset.nodeId = node.id
+          element.dataset.tone = node.tone
+          element.dataset.groups = node.groups.join(" ")
+          if (node.compact) element.dataset.compact = "true"
+          element.style.left = `${node.x}px`
+          element.style.top = `${node.y}px`
+          element.style.width = `${node.w}px`
+          element.style.height = `${node.h}px`
+          element.innerHTML = `<div class="node-label">${node.label}</div><div class="node-meta">${node.meta}</div>`
+          element.title = `${node.label}: ${node.meta}`
+          element.addEventListener("mouseenter", () => focusNode(node.id))
+          element.addEventListener("mouseleave", clearFocus)
+          nodeRoot.appendChild(element)
+        })
+      }
+
+      function anchor(node, side = "right") {
+        const points = {
+          left: [node.x, node.y + node.h / 2],
+          right: [node.x + node.w, node.y + node.h / 2],
+          top: [node.x + node.w / 2, node.y],
+          bottom: [node.x + node.w / 2, node.y + node.h],
+        }
+        return points[side]
+      }
+
+      function polylinePoints(edge) {
+        const source = nodeById.get(edge.from)
+        const target = nodeById.get(edge.to)
+        const start = anchor(source, edge.fromAnchor || "right")
+        const end = anchor(target, edge.toAnchor || "left")
+        if (edge.points) return [start, ...edge.points, end]
+        if ((edge.fromAnchor === "bottom" && edge.toAnchor === "top") || (edge.fromAnchor === "top" && edge.toAnchor === "bottom")) {
+          const middleY = (start[1] + end[1]) / 2
+          return [start, [start[0], middleY], [end[0], middleY], end]
+        }
+        const middleX = (start[0] + end[0]) / 2
+        return [start, [middleX, start[1]], [middleX, end[1]], end]
+      }
+
+      function renderEdges() {
+        edges.forEach((edge) => {
+          const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline")
+          polyline.id = `edge-${edge.id}`
+          polyline.setAttribute("class", "edge")
+          polyline.dataset.edgeId = edge.id
+          polyline.dataset.from = edge.from
+          polyline.dataset.to = edge.to
+          polyline.dataset.groups = edge.groups.join(" ")
+          polyline.dataset.kind = edge.kind || "execution"
+          polyline.setAttribute("points", polylinePoints(edge).map((point) => point.join(",")).join(" "))
+          edgeRoot.appendChild(polyline)
+
+          if (edge.label && edge.labelAt) {
+            const label = document.createElement("span")
+            label.className = "edge-label"
+            label.dataset.groups = edge.groups.join(" ")
+            label.textContent = edge.label
+            label.style.left = `${edge.labelAt[0]}px`
+            label.style.top = `${edge.labelAt[1]}px`
+            edgeLabelRoot.appendChild(label)
+          }
+        })
+      }
+
+      function setMode(mode) {
+        document.querySelectorAll(".mode-button").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.mode === mode))
+        })
+        document.querySelectorAll(".node, .edge, .edge-label").forEach((element) => {
+          const groups = (element.dataset.groups || "").split(" ")
+          element.classList.toggle("is-muted", mode !== "all" && !groups.includes(mode))
+        })
+      }
+
+      function focusNode(nodeId) {
+        const relatedEdges = edges.filter((edge) => edge.from === nodeId || edge.to === nodeId)
+        const relatedNodes = new Set([nodeId])
+        relatedEdges.forEach((edge) => {
+          relatedNodes.add(edge.from)
+          relatedNodes.add(edge.to)
+        })
+        document.querySelectorAll(".node").forEach((element) => {
+          element.classList.toggle("is-related", relatedNodes.has(element.dataset.nodeId))
+        })
+        document.querySelectorAll(".edge").forEach((element) => {
+          element.classList.toggle("is-related", relatedEdges.some((edge) => edge.id === element.dataset.edgeId))
+        })
+      }
+
+      function clearFocus() {
+        document.querySelectorAll(".is-related").forEach((element) => element.classList.remove("is-related"))
+      }
+
+      function fitArtboard() {
+        const scale = Math.min(1, window.innerWidth / 1800, window.innerHeight / 1120)
+        const shell = document.querySelector("#scale-shell")
+        const artboard = document.querySelector("#artboard")
+        shell.style.width = `${1800 * scale}px`
+        shell.style.height = `${1120 * scale}px`
+        artboard.style.transform = `scale(${scale})`
+      }
+
+      renderLayers()
+      renderNodes()
+      renderEdges()
+      document.querySelectorAll(".mode-button").forEach((button) => {
+        button.addEventListener("click", () => setMode(button.dataset.mode))
+      })
+      window.addEventListener("resize", fitArtboard)
+      fitArtboard()
+    </script>
+  </body>
+</html>

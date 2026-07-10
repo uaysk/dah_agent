@@ -73,12 +73,12 @@ const iconMap: Record<string, typeof Activity> = {
 }
 
 const layerBands = [
-  { label: "Interface", x: 12, y: 16, w: 456, h: 122, className: "border-teal-400/25 bg-teal-950/20" },
-  { label: "Orchestration / Agent Reasoning", x: 478, y: 16, w: 458, h: 238, className: "border-indigo-400/25 bg-indigo-950/20" },
-  { label: "Policy Control", x: 948, y: 16, w: 468, h: 238, className: "border-amber-400/25 bg-amber-950/20" },
-  { label: "Mission Simulation", x: 948, y: 284, w: 468, h: 130, className: "border-cyan-400/25 bg-cyan-950/20" },
-  { label: "Evidence / Recovery / Judge", x: 478, y: 284, w: 458, h: 256, className: "border-emerald-400/25 bg-emerald-950/20" },
-  { label: "Storage / Observability", x: 948, y: 428, w: 468, h: 430, className: "border-slate-400/25 bg-slate-950/45" },
+  { label: "Interface", x: 12, y: 16, w: 456, h: 122, className: "border-zinc-700 bg-zinc-950/80" },
+  { label: "Orchestration / Agent Reasoning", x: 478, y: 16, w: 458, h: 238, className: "border-zinc-600 bg-zinc-900/80" },
+  { label: "Policy Control", x: 948, y: 16, w: 468, h: 238, className: "border-zinc-500 bg-zinc-950/90" },
+  { label: "Mission Simulation", x: 948, y: 284, w: 468, h: 130, className: "border-zinc-600 bg-zinc-900/65" },
+  { label: "Evidence / Recovery / Judge", x: 478, y: 284, w: 458, h: 256, className: "border-zinc-600 bg-zinc-900/75" },
+  { label: "Storage / Observability", x: 948, y: 428, w: 468, h: 430, className: "border-zinc-700 bg-zinc-950/90" },
 ]
 
 function statusVariant(status: ComponentStatus) {
@@ -123,33 +123,36 @@ function NodeCard({
   onSelect: (node: GraphNode) => void
 }) {
   const Icon = iconMap[node.id] ?? Activity
+  const displayLabel = node.id === "simulator" ? "Mission Simulator" : node.label
+  const displayKind = node.id === "simulator" ? "UAV · UGV · GCS · relay" : node.kind
   return (
     <button
       type="button"
       onClick={() => onSelect(node)}
+      title={`${node.label}: ${node.description}`}
       className={cn(
-        "absolute z-30 flex h-[74px] w-[184px] flex-col items-start overflow-hidden rounded-md border bg-card p-3 text-left shadow-sm transition",
-        "hover:border-primary hover:shadow-[0_0_24px_rgba(45,212,191,0.20)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected && "border-primary ring-2 ring-primary/30",
-        node.status === "active" && "border-amber-300/70 bg-amber-950/45 shadow-[0_0_22px_rgba(245,158,11,0.18)]",
-        node.status === "degraded" && "border-destructive/60 bg-red-950/40",
-        live && "node-live border-cyan-300 bg-cyan-950/60 shadow-[0_0_36px_rgba(34,211,238,0.45)]",
+        "absolute z-30 flex h-[74px] w-[184px] flex-col items-start overflow-hidden rounded-md border border-zinc-700 bg-zinc-950 p-2.5 text-left transition-colors",
+        "hover:border-zinc-300 hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950",
+        selected && "border-zinc-100 ring-1 ring-zinc-100",
+        node.status === "active" && "border-zinc-400 bg-zinc-800",
+        node.status === "degraded" && "border-zinc-300 bg-zinc-700",
+        live && "node-live border-zinc-100 bg-zinc-100 text-zinc-950",
       )}
       style={{ left: positions[node.id]?.x ?? 0, top: positions[node.id]?.y ?? 0 }}
     >
-      <div className="flex w-full items-center justify-between gap-2">
+      <div className="flex min-h-8 w-full items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300", live && "border-zinc-400 bg-zinc-200 text-zinc-950")}>
             <Icon className="h-4 w-4" />
           </span>
-          <span className="truncate text-sm font-semibold">{node.label}</span>
+          <span className={cn("node-label line-clamp-2 whitespace-normal text-xs font-semibold leading-4 [overflow-wrap:anywhere]", live && "text-zinc-950")}>{displayLabel}</span>
         </div>
       </div>
-      <div className="mt-2 flex w-full items-center justify-between gap-2">
-        <Badge variant={statusVariant(node.status)} className="shrink-0 capitalize">
+      <div className="mt-1 flex w-full items-center justify-between gap-2">
+        <Badge variant={live ? "outline" : statusVariant(node.status)} className={cn("shrink-0 capitalize", live && "border-zinc-400 bg-zinc-100 text-zinc-950 before:bg-zinc-950")}>
           {node.status}
         </Badge>
-        <span className="truncate text-[11px] text-muted-foreground">{node.kind}</span>
+        <span className={cn("truncate text-[11px] text-muted-foreground", live && "text-zinc-600")}>{displayKind}</span>
       </div>
     </button>
   )
@@ -190,7 +193,7 @@ export function AgentGraph({
   return (
     <div
       ref={containerRef}
-      className="overflow-hidden rounded-md border border-border/80 bg-background"
+      className="overflow-hidden rounded-md border border-zinc-700 bg-zinc-950"
       style={{ height: Math.ceil(GRAPH_HEIGHT * scale) }}
     >
       <div
@@ -207,7 +210,7 @@ export function AgentGraph({
         {layerBands.map((band) => (
           <div
             key={`${band.label}-label`}
-            className="absolute z-20 flex items-center justify-center rounded-sm border border-border/70 bg-background/85 px-1 text-[10px] font-semibold uppercase tracking-normal text-foreground/80 shadow-sm backdrop-blur-sm"
+            className="absolute z-20 flex items-center justify-center rounded-sm border border-zinc-700 bg-zinc-950/95 px-1 text-[10px] font-semibold uppercase text-zinc-400"
             style={{
               left: band.x + 4,
               top: band.y + 10,
@@ -223,13 +226,13 @@ export function AgentGraph({
         <svg className="absolute inset-0 z-10 h-full w-full" viewBox="0 0 1438 874" aria-hidden="true">
           <defs>
             <marker id="arrow-live" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#22d3ee" />
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#fafafa" />
             </marker>
             <marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b" />
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d4d4d8" />
             </marker>
             <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#52525b" />
             </marker>
           </defs>
           {edges.map((edge) => {
@@ -241,9 +244,9 @@ export function AgentGraph({
                 <path
                   d={path}
                   fill="none"
-                  stroke={live ? "#22d3ee" : edge.active ? "#f59e0b" : "#64748b"}
-                  strokeWidth={live ? 4 : edge.active ? 2.75 : 1.4}
-                  strokeDasharray={live || edge.active ? "0" : "5 6"}
+                  stroke={live ? "#fafafa" : edge.active ? "#d4d4d8" : "#52525b"}
+                  strokeWidth={live ? 3.6 : edge.active ? 2.2 : 1.25}
+                  strokeDasharray={live ? "9 5" : edge.active ? "10 6" : "4 7"}
                   markerEnd={live ? "url(#arrow-live)" : edge.active ? "url(#arrow-active)" : "url(#arrow-muted)"}
                   className={live ? "live-edge" : edge.active ? "active-edge" : undefined}
                 />

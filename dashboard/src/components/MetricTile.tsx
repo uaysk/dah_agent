@@ -1,7 +1,7 @@
-import { Activity, Gauge, ShieldCheck, Timer, TrendingUp } from "lucide-react"
+import { Activity, Gauge, GitBranch, ShieldCheck, Timer, TrendingUp } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 
-const icons = [Activity, ShieldCheck, Gauge, Timer, TrendingUp]
+const icons = [Activity, ShieldCheck, Gauge, TrendingUp, Timer, GitBranch]
 
 interface MetricTileProps {
   label: string
@@ -13,15 +13,15 @@ interface MetricTileProps {
 export function MetricTile({ label, value, hint, index }: MetricTileProps) {
   const Icon = icons[index % icons.length]
   return (
-    <Card className="overflow-hidden">
-      <CardContent className="flex h-[88px] items-center gap-3 p-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <Icon className="h-4 w-4" />
+    <Card className="rounded-none border-0 bg-card">
+      <CardContent className="flex h-[96px] flex-col justify-between p-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="truncate text-[11px] font-medium uppercase text-muted-foreground">{label}</div>
+          <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-xs text-muted-foreground">{label}</div>
-          <div className="mt-1 truncate text-xl font-semibold tabular-nums">{value}</div>
-          {hint ? <div className="mt-1 truncate text-[11px] text-muted-foreground">{hint}</div> : null}
+          <div className="truncate text-2xl font-semibold tabular-nums leading-none">{value}</div>
+          {hint ? <div className="mt-1.5 truncate text-[10px] text-muted-foreground">{hint}</div> : null}
         </div>
       </CardContent>
     </Card>

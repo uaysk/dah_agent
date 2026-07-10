@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -93,36 +94,57 @@ def metric_snapshot(rows: list[dict[str, Any]]) -> dict[str, float]:
     detection_latencies: list[float] = []
     recovery_times: list[float] = []
     for row in rows:
-        response = row["response"]
-        request = row.get("request") or {}
-        scenario_is_attack = request.get("attack_type") not in {"random_packet_loss", "normal_baseline"}
+        if "response" in row:
+            response = row["response"]
+            request = row.get("request") or {}
+            scenario_is_attack = request.get("attack_type") not in {"random_packet_loss", "normal_baseline"}
+            classification = response.get("classification", {}).get("classification")
+            is_detected = classification in {"ATTACK_SUSPECTED", "ATTACK_CONFIRMED"}
+            recovery_success = bool(response.get("recovery_verification", {}).get("success"))
+            impact = (response.get("impact_verification") or {}).get("result") or {}
+            first_anomaly = impact.get("first_anomaly_second")
+            threshold = impact.get("detection_threshold_second")
+            summary = (response.get("mission_simulation") or {}).get("summary") or {}
+            safe_stop_triggered = bool(summary.get("safe_stop_triggered"))
+            gap = float(summary.get("max_consecutive_coordinate_gap_seconds") or 0)
+            safe_stop_second = summary.get("safe_stop_second")
+            duration_seconds = request.get("duration_seconds") or 0
+            verdict = response.get("judge_verdict", {})
+            total_score = float(verdict.get("total_score") or 0)
+            availability_score = float(verdict.get("availability") or 0)
+        else:
+            scenario_is_attack = bool(row.get("scenario_is_attack"))
+            is_detected = bool(row.get("detected"))
+            recovery_success = bool(row.get("recovered"))
+            first_anomaly = row.get("first_anomaly_second")
+            threshold = row.get("detection_threshold_second")
+            safe_stop_triggered = bool(row.get("safe_stop_triggered"))
+            gap = float(row.get("coordinate_gap_seconds") or 0)
+            safe_stop_second = row.get("safe_stop_second")
+            duration_seconds = row.get("duration_seconds") or 0
+            total_score = float(row.get("total_score") or 0)
+            availability_score = float(row.get("availability") or 0)
+
         if scenario_is_attack:
             attack_count += 1
         else:
             non_attack_count += 1
-        classification = response.get("classification", {}).get("classification")
-        is_detected = classification in {"ATTACK_SUSPECTED", "ATTACK_CONFIRMED"}
         if is_detected:
             detected += 1
         if (not scenario_is_attack) and is_detected:
             false_positive += 1
         if scenario_is_attack and not is_detected:
             false_negative += 1
-        if response.get("recovery_verification", {}).get("success"):
+        if recovery_success:
             recovered += 1
-        impact = (response.get("impact_verification") or {}).get("result") or {}
-        first_anomaly = impact.get("first_anomaly_second")
-        threshold = impact.get("detection_threshold_second")
         if is_detected and first_anomaly is not None and threshold is not None:
             detection_latencies.append(float(threshold) - float(first_anomaly))
-        summary = (response.get("mission_simulation") or {}).get("summary") or {}
-        if summary.get("safe_stop_triggered"):
+        if safe_stop_triggered:
             safe_stop += 1
-        gaps.append(float(summary.get("max_consecutive_coordinate_gap_seconds") or 0))
-        recovery_times.append(float((summary.get("safe_stop_second") or request.get("duration_seconds") or 0) - (first_anomaly or 0)))
-        verdict = response.get("judge_verdict", {})
-        total_scores.append(float(verdict.get("total_score") or 0))
-        availability.append(float(verdict.get("availability") or 0))
+        gaps.append(gap)
+        recovery_times.append(float((safe_stop_second or duration_seconds or 0) - (first_anomaly or 0)))
+        total_scores.append(total_score)
+        availability.append(availability_score)
     return {
         "dah_total_runs": float(count),
         "dah_attack_detection_rate": round(detected / count, 4),
@@ -402,6 +424,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     report_generator = runtime.report_generator
     openai_planner = runtime.openai_planner
     temporal_gateway = TemporalGateway(resolved_settings)
+    metric_cache_lock = threading.Lock()
+    metric_cache_signature: tuple[int, str | None] | None = None
+    metric_cache_rows: list[dict[str, Any]] = []
+
+    def current_metric_rows() -> list[dict[str, Any]]:
+        nonlocal metric_cache_signature, metric_cache_rows
+        signature = store.run_metric_signature()
+        with metric_cache_lock:
+            if signature != metric_cache_signature:
+                metric_cache_rows = store.list_run_metric_rows()
+                metric_cache_signature = signature
+            return metric_cache_rows
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -497,8 +531,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
     async def dashboard_state_payload() -> dict[str, Any]:
-        rows = store.list_runs()
-        latest_row = rows[-1] if rows else None
+        latest_row = store.get_latest_run()
         latest = latest_run_summary(latest_row)
         events = store.list_events(latest_row["run_id"]) if latest_row else []
         db_ok = False
@@ -518,7 +551,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "temporal": temporal_status,
             "redis_streams": runtime.event_publisher.ping() if resolved_settings.redis_streams_enabled else {"enabled": False},
         }
-        metrics = metric_snapshot(rows)
+        metrics = metric_snapshot(current_metric_rows())
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "refresh_interval_ms": 3000,
@@ -885,8 +918,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return prometheus_vector("up", 1.0, parse_time(time))
         if metric_name not in METRIC_NAMES:
             return prometheus_vector(metric_name or "unknown", 0.0, parse_time(time))
-        rows = store.list_runs()
-        snapshot = metric_snapshot(rows)
+        snapshot = metric_snapshot(current_metric_rows())
         return prometheus_vector(metric_name, snapshot.get(metric_name, 0.0), parse_time(time))
 
     @app.post("/prometheus/api/v1/query")
@@ -906,7 +938,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return prometheus_matrix(metric_name or "unknown", [])
         start_ts = parse_time(start)
         end_ts = parse_time(end)
-        rows = [row for row in store.list_runs() if start_ts <= run_timestamp(row) <= end_ts]
+        rows = [row for row in current_metric_rows() if start_ts <= run_timestamp(row) <= end_ts]
         values: list[list[Any]] = []
         for index in range(len(rows)):
             subset = rows[: index + 1]
@@ -1045,4 +1077,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

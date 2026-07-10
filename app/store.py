@@ -468,3 +468,76 @@ class Store:
             for row in rows
         ]
 
+    def get_latest_run(self) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("select * from runs order by created_at desc limit 1").fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row["run_id"],
+            "incident_id": row["incident_id"],
+            "status": row["status"],
+            "request": json.loads(row["request_json"]),
+            "response": json.loads(row["response_json"]),
+            "created_at": row["created_at"],
+        }
+
+    def run_metric_signature(self, limit: int = 500) -> tuple[int, str | None]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select count(*) as row_count, max(created_at) as newest_created_at
+                from (select created_at from runs order by created_at desc limit ?)
+                """,
+                (limit,),
+            ).fetchone()
+        return int(row["row_count"]), row["newest_created_at"]
+
+    def list_run_metric_rows(self, limit: int = 500) -> list[dict[str, Any]]:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    select
+                        created_at,
+                        json_extract(request_json, '$.attack_type') as attack_type,
+                        json_extract(request_json, '$.duration_seconds') as duration_seconds,
+                        json_extract(response_json, '$.classification.classification') as classification,
+                        json_extract(response_json, '$.recovery_verification.success') as recovered,
+                        json_extract(response_json, '$.impact_verification.result.first_anomaly_second') as first_anomaly_second,
+                        json_extract(response_json, '$.impact_verification.result.detection_threshold_second') as detection_threshold_second,
+                        json_extract(response_json, '$.mission_simulation.summary.safe_stop_triggered') as safe_stop_triggered,
+                        json_extract(response_json, '$.mission_simulation.summary.max_consecutive_coordinate_gap_seconds') as coordinate_gap_seconds,
+                        json_extract(response_json, '$.mission_simulation.summary.safe_stop_second') as safe_stop_second,
+                        json_extract(response_json, '$.judge_verdict.total_score') as total_score,
+                        json_extract(response_json, '$.judge_verdict.availability') as availability
+                    from (
+                        select created_at, request_json, response_json
+                        from runs
+                        order by created_at desc
+                        limit ?
+                    ) as recent_runs
+                    order by created_at asc
+                    """,
+                    (limit,),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return self.list_runs(limit)
+
+        return [
+            {
+                "created_at": row["created_at"],
+                "scenario_is_attack": row["attack_type"] not in {"random_packet_loss", "normal_baseline"},
+                "detected": row["classification"] in {"ATTACK_SUSPECTED", "ATTACK_CONFIRMED"},
+                "recovered": bool(row["recovered"]),
+                "safe_stop_triggered": bool(row["safe_stop_triggered"]),
+                "first_anomaly_second": row["first_anomaly_second"],
+                "detection_threshold_second": row["detection_threshold_second"],
+                "safe_stop_second": row["safe_stop_second"],
+                "duration_seconds": float(row["duration_seconds"] or 0),
+                "coordinate_gap_seconds": float(row["coordinate_gap_seconds"] or 0),
+                "total_score": float(row["total_score"] or 0),
+                "availability": float(row["availability"] or 0),
+            }
+            for row in rows
+        ]

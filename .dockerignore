@@ -1,0 +1,7 @@
+.git
+backups
+data
+dashboard/dist
+dashboard/node_modules
+**/__pycache__
+*.pyc

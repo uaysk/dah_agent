@@ -13,7 +13,27 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { DashboardEvent, DashboardState, GraphNode } from "@/types"
 import { cn } from "@/lib/utils"
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:18080`
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "")
+}
+
+function resolveApiBaseUrl() {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim()
+  if (configured) return trimTrailingSlash(configured)
+
+  const { protocol, hostname, port } = window.location
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1"
+  const isLocalDevPort = port === "5173"
+  const isLocalDashboardPort = port === "18081"
+
+  if (isLocalHost || isLocalDevPort || isLocalDashboardPort) {
+    return `${protocol}//${hostname}:18080`
+  }
+
+  return trimTrailingSlash(window.location.origin)
+}
+
+const apiBaseUrl = resolveApiBaseUrl()
 const EVENT_PLAYBACK_INTERVAL_MS = 200
 const EVENT_PULSE_DURATION_MS = 850
 const GRAPH_WIDTH = 1438
@@ -58,8 +78,13 @@ function mergeEvent(events: DashboardEvent[], event: DashboardEvent) {
   return [...deduped, event].slice(-30)
 }
 
+function resolveApiResourceUrl(urlOrPath: string) {
+  const parsed = new URL(urlOrPath, apiBaseUrl || window.location.origin)
+  return `${apiBaseUrl}${parsed.pathname}${parsed.search}${parsed.hash}`
+}
+
 async function downloadReport(url: string, filename: string) {
-  const response = await fetch(url, { headers: { Accept: "application/json" } })
+  const response = await fetch(resolveApiResourceUrl(url), { headers: { Accept: "application/json" } })
   if (!response.ok) throw new Error(`report download ${response.status}`)
   const blob = await response.blob()
   const objectUrl = window.URL.createObjectURL(blob)
@@ -323,113 +348,127 @@ export default function App() {
   const activeNodes = data?.graph.nodes.filter((node) => node.status === "active").length ?? 0
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border/80 bg-card/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1660px] flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Network className="h-5 w-5 text-primary" />
-              <h1 className="truncate text-xl font-semibold tracking-normal">DAH Agent Live Operations</h1>
-              <Badge variant={statusBadge(health.status)}>API {health.status ?? "pending"}</Badge>
+    <div data-testid="dashboard-root" className="min-h-screen bg-background">
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex max-w-[1660px] flex-col gap-4 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+              <Network className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="truncate text-lg font-semibold">DAH Agent Operations</h1>
+                <Badge variant={statusBadge(health.status)}>API {health.status ?? "pending"}</Badge>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span>{apiBaseUrl}</span>
+                <span>Updated {connectionLabel(data)}</span>
+                <span className="max-w-[360px] truncate">Last event: {lastLiveEvent?.event_type ?? "waiting"}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 xl:items-end">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Badge variant={statusBadge(streamStatus)}>Stream {streamStatus}</Badge>
               <Badge variant={statusBadge(temporalStatus)}>Temporal {temporalStatus}</Badge>
               <Badge variant={statusBadge(health.redis_streams?.ok ? "online" : "standby")}>Redis {health.redis_streams?.ok ? "online" : "standby"}</Badge>
               <Badge variant={statusBadge(health.openai?.configured ? "online" : "standby")}>LLM {health.openai?.configured ? "configured" : "fallback"}</Badge>
             </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
-              <span>{apiBaseUrl} / refreshed {connectionLabel(data)}</span>
-              <span>last event {lastLiveEvent?.event_type ?? "waiting"}</span>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                aria-pressed={streamEnabled}
+                onClick={() => setStreamEnabled((value) => !value)}
+              >
+                <span className={cn("h-2 w-2 rounded-full border border-zinc-600", streamEnabled && "border-zinc-100 bg-zinc-100")} />
+                <RadioTower className="h-3.5 w-3.5" />
+                Live stream
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void fetchState()} disabled={loading}>
+                <RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+                Refresh
+              </Button>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => setStreamEnabled((value) => !value)}>
-              <RadioTower className="h-4 w-4" />
-              {streamEnabled ? "Stream On" : "Stream Off"}
-            </Button>
-            <Button variant="outline" onClick={() => void fetchState()} disabled={loading}>
-              <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-              Refresh
-            </Button>
-            <Button onClick={() => void runDemoAction("full-demo")} disabled={runningAction !== null}>
-              <Download className="h-4 w-4" />
-              {runningAction === "full-demo" ? "Running" : "Full Demo"}
-            </Button>
-            <Button variant="outline" onClick={() => void runDemoAction("local-p1")} disabled={runningAction !== null}>
-              <Play className="h-4 w-4" />
-              {runningAction === "local-p1" ? "Running" : "Local P1"}
-            </Button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1660px] px-4 py-4">
+      <main className="mx-auto max-w-[1660px] px-4 py-4" aria-busy={loading}>
         {error ? (
-          <div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground">
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-zinc-200 bg-zinc-100 px-3 py-2 text-sm text-zinc-950">
             <CircleAlert className="h-4 w-4" />
             {error}
           </div>
         ) : null}
 
-        <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <section data-testid="metrics-strip" className="grid gap-px overflow-hidden rounded-md border border-border bg-border md:grid-cols-3 xl:grid-cols-6">
           {metricTiles.map((metric, index) => (
             <MetricTile key={metric.label} index={index} {...metric} />
           ))}
         </section>
 
-        <section className="mt-4">
-          <Card className="border-border/80 bg-card/90">
-            <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                <Activity className="h-4 w-4 text-primary" />
-                <span className="truncate">Demo Controls</span>
+        <section data-testid="command-bar" className="mt-3 flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+              <Activity className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">Scenario commands</div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                {runningAction ? `Executing ${runningAction}` : "Ready for local, durable, suite, and advisory runs"}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => void runDemoAction("full-demo")} disabled={runningAction !== null}>
-                  <Download className="h-4 w-4" />
-                  {runningAction === "full-demo" ? "Running" : "Full Demo + Report"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void runDemoAction("local-p1")} disabled={runningAction !== null}>
-                  <Play className="h-4 w-4" />
-                  {runningAction === "local-p1" ? "Running" : "Local P1"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void runDemoAction("temporal-p1")} disabled={runningAction !== null}>
-                  <Workflow className="h-4 w-4" />
-                  {runningAction === "temporal-p1" ? "Running" : "Temporal P1"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void runDemoAction("suite")} disabled={runningAction !== null}>
-                  <FlaskConical className="h-4 w-4" />
-                  {runningAction === "suite" ? "Running" : "E0-E5 Suite"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void runDemoAction("llm")} disabled={runningAction !== null}>
-                  <BrainCircuit className="h-4 w-4" />
-                  {runningAction === "llm" ? "Running" : "LLM Advisory"}
-                </Button>
-                {data?.latest_run ? (
-                  <Button size="sm" variant="outline" asChild>
-                    <a href={`${apiBaseUrl}/reports/${data.latest_run.run_id}.json`} target="_blank" rel="noreferrer">
-                      <FileText className="h-4 w-4" />
-                      Latest Report
-                    </a>
-                  </Button>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={() => void runDemoAction("full-demo")} disabled={runningAction !== null}>
+              <Download className="h-4 w-4" />
+              {runningAction === "full-demo" ? "Running" : "Full Demo + Report"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void runDemoAction("local-p1")} disabled={runningAction !== null}>
+              <Play className="h-4 w-4" />
+              {runningAction === "local-p1" ? "Running" : "Local P1"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void runDemoAction("temporal-p1")} disabled={runningAction !== null}>
+              <Workflow className="h-4 w-4" />
+              {runningAction === "temporal-p1" ? "Running" : "Temporal P1"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void runDemoAction("suite")} disabled={runningAction !== null}>
+              <FlaskConical className="h-4 w-4" />
+              {runningAction === "suite" ? "Running" : "E0-E5 Suite"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void runDemoAction("llm")} disabled={runningAction !== null}>
+              <BrainCircuit className="h-4 w-4" />
+              {runningAction === "llm" ? "Running" : "LLM Advisory"}
+            </Button>
+            {data?.latest_run ? (
+              <Button size="sm" variant="ghost" asChild>
+                <a href={`${apiBaseUrl}/reports/${data.latest_run.run_id}.json`} target="_blank" rel="noreferrer">
+                  <FileText className="h-4 w-4" />
+                  Latest Report
+                </a>
+              </Button>
+            ) : null}
+          </div>
         </section>
 
-        <section className="mt-4">
-          <Card className="border-border/80 bg-card/90">
-            <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 pb-3">
+        <section data-testid="execution-workspace" className="mt-3">
+          <Card>
+            <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 border-b bg-muted/40 pb-3">
               <div>
                 <CardTitle>Agent Execution Graph</CardTitle>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {activeNodes} active components / {activeEdges} active links / {pulseNodeIds.length} live pulses
                 </div>
               </div>
-              <Badge variant="outline">{data?.graph.nodes.length ?? 0} components</Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant={pulseNodeIds.length > 0 ? "default" : "outline"}>{pulseNodeIds.length > 0 ? "Live activity" : "Idle"}</Badge>
+                <Badge variant="outline">{data?.graph.nodes.length ?? 0} components</Badge>
+              </div>
             </CardHeader>
-            <CardContent>
-              <div className="grid min-h-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_220px]">
+            <CardContent className="p-3">
+              <div className="grid min-h-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_210px]">
                 <div ref={graphColumnRef} className="min-w-0">
                   <AgentGraph
                     nodes={data?.graph.nodes ?? []}
@@ -441,13 +480,13 @@ export default function App() {
                   />
                 </div>
                 <div
-                  className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border/80 bg-background/80"
+                  className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-card"
                   style={{ height: graphPanelHeight, maxHeight: graphPanelHeight }}
                 >
-                  <div className="flex items-center justify-between gap-2 border-b border-border/80 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/50 px-3 py-2.5">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-semibold">Executed Nodes</div>
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">200ms visual playback</div>
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">200ms visual playback</div>
                     </div>
                     <Badge variant="outline" className="shrink-0">{executedNodeTotal}</Badge>
                   </div>
@@ -464,26 +503,26 @@ export default function App() {
                               if (node) setSelectedNode(node)
                             }}
                             className={cn(
-                              "flex w-full items-start gap-2 rounded-md border px-2 py-2 text-left transition hover:border-primary",
-                              live ? "live-event border-cyan-300/70 bg-cyan-950/35" : "border-border/70 bg-card/70",
+                              "flex w-full items-start gap-2 rounded-md border px-2 py-2 text-left transition-colors hover:border-zinc-500 hover:bg-zinc-800",
+                              live ? "live-event border-zinc-100 bg-zinc-100 text-zinc-950 hover:bg-zinc-200" : "border-zinc-700 bg-zinc-950",
                             )}
                           >
                             <span className={cn(
                               "mt-0.5 flex h-5 w-7 shrink-0 items-center justify-center rounded-sm text-[10px] tabular-nums",
-                              live ? "bg-cyan-300 text-slate-950" : "bg-muted text-muted-foreground",
+                              live ? "bg-zinc-950 text-white" : "bg-zinc-800 text-zinc-400",
                             )}>
                               {step.sequence}
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-xs font-semibold">{nodeLabelById.get(step.node_id) ?? step.node_id}</span>
-                              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{step.event_type}</span>
-                              <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{nodeKindById.get(step.node_id) ?? step.source}</span>
+                              <span className={cn("block truncate text-xs font-semibold", live && "text-zinc-950")}>{nodeLabelById.get(step.node_id) ?? step.node_id}</span>
+                              <span className={cn("mt-0.5 block truncate text-[11px] text-muted-foreground", live && "text-zinc-600")}>{step.event_type}</span>
+                              <span className={cn("mt-0.5 block truncate text-[10px] text-muted-foreground", live && "text-zinc-500")}>{nodeKindById.get(step.node_id) ?? step.source}</span>
                             </span>
                           </button>
                         )
                       })}
                       {executedNodeSteps.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-border/80 p-3 text-xs text-muted-foreground">
+                        <div className="rounded-md border border-dashed border-zinc-700 p-3 text-xs leading-5 text-muted-foreground">
                           Run a scenario to populate this path.
                         </div>
                       ) : null}
@@ -495,10 +534,10 @@ export default function App() {
           </Card>
         </section>
 
-        <section className="mt-4 grid gap-4 xl:grid-cols-[430px_360px_1fr]">
+        <section data-testid="run-inspection" className="mt-3 grid gap-3 xl:grid-cols-[430px_360px_1fr]">
           <RunSummary run={data?.latest_run ?? null} />
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="border-b pb-3">
               <CardTitle>Selected Component</CardTitle>
             </CardHeader>
             <CardContent>
@@ -520,7 +559,7 @@ export default function App() {
             </CardContent>
           </Card>
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="border-b pb-3">
               <CardTitle>Live Event Stream</CardTitle>
             </CardHeader>
             <CardContent>
@@ -529,7 +568,7 @@ export default function App() {
           </Card>
         </section>
 
-        <section className="mt-4">
+        <section data-testid="detail-tabs" className="mt-3 pb-5">
           <Tabs defaultValue="trace">
             <TabsList>
               <TabsTrigger value="trace">Graph Trace</TabsTrigger>
@@ -538,14 +577,14 @@ export default function App() {
             </TabsList>
             <TabsContent value="trace">
               <Card>
-                <CardHeader className="pb-3">
+                <CardHeader className="border-b pb-3">
                   <CardTitle>LangGraph Trace</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[220px]">
-                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                  <ScrollArea className="h-[220px] min-w-0">
+                    <div className="grid min-w-0 gap-2 md:grid-cols-2 xl:grid-cols-4">
                       {(data?.latest_run?.agent_graph.trace ?? []).map((item, index) => (
-                        <div key={`${item.node}-${index}`} className="rounded-md border bg-card px-3 py-2">
+                        <div key={`${item.node}-${index}`} className="min-w-0 rounded-md border border-l-2 border-zinc-700 border-l-zinc-200 bg-card px-3 py-2">
                           <div className="text-xs text-muted-foreground">#{index + 1}</div>
                           <div className="mt-1 truncate text-sm font-semibold">{item.node}</div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">{Object.keys(item.detail ?? {}).join(", ") || "state"}</div>
@@ -558,12 +597,12 @@ export default function App() {
             </TabsContent>
             <TabsContent value="runtime">
               <Card>
-                <CardHeader className="pb-3">
+                <CardHeader className="border-b pb-3">
                   <CardTitle>Runtime Links</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-2 md:grid-cols-3">
                   {Object.entries(data?.links ?? {}).map(([label, href]) => (
-                    <a key={label} href={href} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-md border bg-card px-3 py-2 text-sm hover:border-primary">
+                    <a key={label} href={href} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-md border bg-card px-3 py-2 text-sm transition-colors hover:border-zinc-500 hover:bg-zinc-800">
                       <span className="truncate">{label.replaceAll("_", " ")}</span>
                       <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
                     </a>
@@ -573,7 +612,7 @@ export default function App() {
             </TabsContent>
             <TabsContent value="coverage">
               <Card>
-                <CardHeader className="pb-3">
+                <CardHeader className="border-b pb-3">
                   <CardTitle>Report Coverage Map</CardTitle>
                 </CardHeader>
                 <CardContent>
